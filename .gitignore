@@ -1,0 +1,7 @@
+state/
+.runtime/
+야담작업/
+야담제작소웹/
+.env
+.env.*
+*.log
