@@ -5,6 +5,20 @@ let steps=expandedSteps;
 let projectClosed=false,activeProjectPath=null,projectCloseBusy=false;
 let stageCompleteBusy=null;
 const session=new URLSearchParams(location.search).get('session');const query=session?'?session='+encodeURIComponent(session):'';const container=document.getElementById('steps');const cleanupAction=document.getElementById('cleanup-action');let statuses={};let signature='';let fetching=false;
+const usageNotice=document.getElementById('usage-notice');
+const usageNoticeKey='yadam77.usage-notice.v1';
+let usageNoticeSeen=false;
+try {
+ usageNoticeSeen=localStorage.getItem(usageNoticeKey)==='acknowledged';
+}catch{}
+usageNotice.addEventListener('cancel',event=>event.preventDefault());
+usageNotice.querySelector('form').addEventListener('submit',()=>{
+ try {
+  localStorage.setItem(usageNoticeKey,'acknowledged');
+ }catch{}
+});
+if(!usageNoticeSeen)usageNotice.showModal();
+
 let imageReview={};
 const reviewPrompt=document.getElementById('image-review-prompt');
 const reviewScenes=document.getElementById('image-review-scenes');

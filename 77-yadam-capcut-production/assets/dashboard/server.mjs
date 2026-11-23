@@ -22,7 +22,7 @@ function reply(res,code,data){res.writeHead(code,{'Content-Type':'application/js
 http.createServer(async(req,res)=>{
  if(![`127.0.0.1:${port}`,`localhost:${port}`].includes(req.headers.host))return reply(res,403,{error:'Local access only'});
  const url=new URL(req.url,`http://127.0.0.1:${port}`);const route=url.pathname;
- if(route==='/api/health')return reply(res,200,{service:'lala-yadam-dashboard',version:2,workflowOrderVersion:3,sceneImageReview:true,sceneImageReviewChoice:true,pid:process.pid,root});
+ if(route==='/api/health')return reply(res,200,{service:'lala-yadam-dashboard',version:2,workflowOrderVersion:3,sceneImageReview:true,sceneImageReviewChoice:true,usageNoticeVersion:1,pid:process.pid,root});
  const session=url.searchParams.get('session');
  if(session!==null&&!/^[a-zA-Z0-9_-]{1,96}$/.test(session))return reply(res,400,{error:'Invalid session'});
  const stateDir=session?path.join(base,'sessions',session):base;
