@@ -142,7 +142,7 @@ export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',
       const next=rewrite(t.text,t.file,nextFile,root,[...moves,...directoryMoves]);
       if(next!==t.text)updates.push({from:t.file,file:nextFile,original:t.text,next});
     }
-    const pending=Array.from({length:12},(_,i)=>i+1).filter(n=>ctx.steps[n]?.state!=='completed');
+    const pending=Array.from({length:13},(_,i)=>i+1).filter(n=>ctx.steps[n]?.state!=='completed');
     return {moves,removals,preserved,updates,pending};
   }
   function preview(session) {
@@ -230,15 +230,15 @@ export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',
     return {closed:true,message,closedAt:at};
   }
   function completeStage(session,expectedProjectPath,step) {
-    if(step!==10&&step!==11)fail('사용자 완료 버튼은 10·11단계에만 사용할 수 있습니다.');
+    if(![10,11,12].includes(step))fail('사용자 완료 버튼은 10~12단계에만 사용할 수 있습니다.');
     const ctx=context(session);
     if(expectedProjectPath!==ctx.current.projectPath)fail('현재 작품이 변경되었습니다. 현황표를 새로고침해 주세요.');
     if(locks.has(ctx.root))fail('폴더 정리가 끝난 후 완료를 표시해 주세요.');
-    if(ctx.current.workflowOrderVersion!==2)fail('77로 현황표를 다시 열어 단계 순서를 갱신해 주세요.');
+    if(ctx.current.workflowOrderVersion!==3)fail('77로 현황표를 다시 열어 단계 순서를 갱신해 주세요.');
     if(ctx.steps[step]?.state==='completed')return {completed:true,step};
     const at=new Date().toISOString(),steps={...ctx.steps,[step]:{...ctx.steps[step],state:'completed',completionSource:'user',completedAt:at}};
-    const pending=Array.from({length:12},(_,i)=>i+1).filter(n=>steps[n]?.state!=='completed');
-    const current={...ctx.current,projectStatus:pending.length?'in_progress':'finished',status:pending.length?'awaiting_input':'completed',step:pending[0]||12,nextInput:pending.length?`${pending[0]}단계 작업을 채팅에서 이어가세요.`:'제작 단계 완료 · 폴더 정리 또는 프로젝트 종료를 선택하세요.'};
+    const pending=Array.from({length:13},(_,i)=>i+1).filter(n=>steps[n]?.state!=='completed');
+    const current={...ctx.current,projectStatus:pending.length?'in_progress':'finished',status:pending.length?'awaiting_input':'completed',step:pending[0]||13,nextInput:pending.length?`${pending[0]}단계 작업을 채팅에서 이어가세요.`:'제작 단계 완료 · 폴더 정리 또는 프로젝트 종료를 선택하세요.'};
     if(ctx.current.projectStatus==='closed')current.resumedAt=at;
     const snapshot=path.join(ctx.root,'현황표상태.json'),record=path.join(ctx.root,'00_제작진행.md');
     const originals=[ctx.currentFile,ctx.stepsFile,snapshot,record].map(file=>[file,fs.existsSync(file)?fs.readFileSync(file):null]);
