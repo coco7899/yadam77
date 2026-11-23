@@ -5,8 +5,113 @@ let steps=expandedSteps;
 let projectClosed=false,activeProjectPath=null,projectCloseBusy=false;
 let stageCompleteBusy=null;
 const session=new URLSearchParams(location.search).get('session');const query=session?'?session='+encodeURIComponent(session):'';const container=document.getElementById('steps');const cleanupAction=document.getElementById('cleanup-action');let statuses={};let signature='';let fetching=false;
-function paint(){container.querySelectorAll(':scope > .step').forEach(card=>card.remove());const done=steps.filter((_,i)=>statuses[i+1]?.state==='completed').length;document.getElementById('progress').textContent=`${done} / ${steps.length}`;document.getElementById('meter').max=steps.length;document.getElementById('meter').value=done;const current=steps.findIndex((_,i)=>statuses[i+1]?.state!=='completed');const active=current>=0?statuses[current+1]?.state:null;document.getElementById('next').textContent=projectClosed?'프로젝트 종료 · 다음 이야기는 새 채팅에서':current<0?'모든 단계 완료':`${active==='running'?'현재':'다음'} · ${current+1}단계 ${steps[current]}`;steps.forEach((title,index)=>{const n=index+1;const entry=statuses[n]||{};const state=entry.state;const card=document.createElement('article');card.dataset.step=n;card.className='step'+(state==='completed'?' done':state==='running'?' running':index===current&&!projectClosed?' next':'');const top=document.createElement('div');top.className='top';const num=document.createElement('span');num.textContent=String(n).padStart(2,'0');const mark=document.createElement('span');mark.className='mark';mark.textContent=state==='completed'?'✓':state==='running'?'…':index===current?'다음':'';top.append(num,mark);const name=document.createElement('h2');name.textContent=title;name.style.whiteSpace='pre-line';const text=document.createElement('p');text.className='state';text.textContent=state==='completed'?'완료':state==='running'?'작업 중':state==='awaiting_input'?'입력 대기':state==='failed'?'확인이 필요합니다':index===current?'다음 작업':'대기';card.append(top,name,text);if(n>=10&&n<=12){const button=document.createElement('button');button.type='button';button.className='stage-complete';button.textContent=state==='completed'?'완료됨':stageCompleteBusy===n?'저장 중…':'완료';button.setAttribute('aria-label',`${n}단계 ${title} ${state==='completed'?'완료됨':'완료'}`);button.disabled=!activeProjectPath||state==='completed'||stageCompleteBusy!==null||cleanupBusy||projectCloseBusy;button.addEventListener('click',()=>completeStageFromCard(n));card.append(button);}container.insertBefore(card,cleanupAction)})}
-async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'주제와 길이를 채팅에서 정해주세요';paint()}document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
+let imageReview={};
+const reviewPrompt=document.getElementById('image-review-prompt');
+const reviewScenes=document.getElementById('image-review-scenes');
+const reviewError=document.getElementById('image-review-error');
+const reviewRestart=document.getElementById('image-review-restart');
+const reviewKeep=document.getElementById('image-review-keep');
+let reviewBusy=false;
+let displayedReview;
+function paintReviewPrompt(){
+ const pending=imageReview.pending;
+ reviewPrompt.hidden=!pending;
+ if(displayedReview!==pending?.revision){
+  reviewError.hidden=true;
+  reviewError.textContent='';
+  displayedReview=pending?.revision;
+ }
+ if(!pending)return;
+ const names=pending.scenes.slice(0,8).join(', ');
+ const more=pending.scenes.length-8;
+ reviewScenes.textContent=names+(more>0?` 외 ${more}컷`:'');
+ reviewRestart.disabled=reviewBusy;
+ reviewKeep.disabled=reviewBusy;
+}
+async function chooseImageReview(decision){
+ const revision=imageReview.pending?.revision;
+ if(!revision||reviewBusy)return;
+ reviewBusy=true;
+ paintReviewPrompt();
+ reviewError.hidden=true;
+ try{
+  const response=await fetch('/api/image-review/decision'+query,{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({revision,decision,expectedProjectPath:activeProjectPath})
+  });
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error);
+  imageReview=result.imageReview;
+  signature='';
+  paint();
+ }catch(error){
+  reviewError.textContent=error.message||'선택을 저장하지 못했어요. 다시 시도해 주세요.';
+  reviewError.hidden=false;
+ }finally{
+  reviewBusy=false;
+  paintReviewPrompt();
+  void refresh();
+ }
+}
+reviewRestart.addEventListener('click',()=>chooseImageReview('restart'));
+reviewKeep.addEventListener('click',()=>chooseImageReview('keep'));
+
+function paint(){
+ paintReviewPrompt();
+ container.querySelectorAll(':scope > .step').forEach(card=>card.remove());
+ const required=new Set(imageReview.required??[]);
+ const complete=n=>statuses[n]?.state==='completed'&&!required.has(n);
+ const done=steps.filter((_,i)=>complete(i+1)).length;
+ document.getElementById('progress').textContent=`${done} / ${steps.length}`;
+ document.getElementById('meter').max=steps.length;
+ document.getElementById('meter').value=done;
+ const current=steps.findIndex((_,i)=>!complete(i+1));
+ const active=current>=0?statuses[current+1]?.state:null;
+ document.getElementById('next').textContent=projectClosed
+  ?'프로젝트 종료 · 다음 이야기는 새 채팅에서'
+  :current<0?'모든 단계 완료':`${active==='running'?'현재':'다음'} · ${current+1}단계 ${steps[current]}`;
+ steps.forEach((title,index)=>{
+  const n=index+1;
+  const entry=statuses[n]||{};
+  const state=entry.state;
+  const review=required.has(n);
+  const card=document.createElement('article');
+  card.dataset.step=n;
+  card.className='step'+(review?' review-required':complete(n)?' done':state==='running'?' running':index===current&&!projectClosed?' next':'');
+  const top=document.createElement('div');
+  top.className='top';
+  const num=document.createElement('span');
+  num.textContent=String(n).padStart(2,'0');
+  const mark=document.createElement('span');
+  mark.className='mark';
+  mark.textContent=review?'!':complete(n)?'✓':state==='running'?'…':index===current?'다음':'';
+  top.append(num,mark);
+  const name=document.createElement('h2');
+  name.textContent=title;
+  name.style.whiteSpace='pre-line';
+  const text=document.createElement('p');
+  text.className='state';
+  text.textContent=review
+   ?(state==='completed'||entry.previousCompletions?.length?'이전 완료 기록 있음 · 재검수 필요':'재검수 필요')
+   :complete(n)?'완료':state==='running'?'작업 중':state==='awaiting_input'?'입력 대기':state==='failed'?'확인이 필요합니다':index===current?'다음 작업':'대기';
+  if(review&&imageReview.scenes?.length)text.title='새 장면 이미지: '+imageReview.scenes.join(', ');
+  card.append(top,name,text);
+  if(n>=10&&n<=12){
+   const button=document.createElement('button');
+   const blocked=review&&n===10&&(required.has(8)||required.has(9));
+   button.type='button';
+   button.className='stage-complete';
+   button.textContent=complete(n)?'완료됨':stageCompleteBusy===n?'저장 중…':'완료';
+   button.setAttribute('aria-label',`${n}단계 ${title} ${button.textContent}`);
+   button.disabled=!activeProjectPath||complete(n)||blocked||stageCompleteBusy!==null||cleanupBusy||projectCloseBusy;
+   if(blocked)button.title='새 이미지의 8·9단계 검수 후 CapCut 인계를 완료할 수 있어요.';
+   button.addEventListener('click',()=>completeStageFromCard(n));
+   card.append(button);
+  }
+  container.insertBefore(card,cleanupAction);
+ });
+}
+async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'주제와 길이를 채팅에서 정해주세요';paint()}document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
 paint();setTimeout(refresh,0);setInterval(refresh,2500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 
 const channelForm=document.getElementById('channel-form');

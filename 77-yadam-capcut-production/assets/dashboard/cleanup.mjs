@@ -100,7 +100,7 @@ export function recycleWindows(files) {
   });
 }
 
-export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',recycle=recycleWindows}) {
+export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',recycle=recycleWindows,reviewImages=()=>({})}) {
   const plans=new Map(),locks=new Set();
   function context(session) {
     if(!/^[a-zA-Z0-9_-]{1,96}$/.test(session||''))fail('현재 채팅이 확인되지 않습니다. 77로 현황표를 다시 열어 주세요.');
@@ -109,9 +109,10 @@ export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',
     if(!current.projectPath)fail('현재 채팅에서 작품을 먼저 선택해 주세요.');
     const requested=path.resolve(current.projectPath),base=fs.realpathSync(allowedRoot),root=fs.realpathSync(requested);
     if(!within(base,root)||requested.toLowerCase()!==root.toLowerCase())fail('작품 폴더 범위를 벗어나거나 연결 경로입니다. 정리를 중단했습니다.');
+    const imageReview=reviewImages(stateDir,current,steps);
     const files=inventory(root);
-    const stamp=hash(JSON.stringify({files:files.map(f=>[f.relative,f.size,f.mtime,f.ino]),current:fs.readFileSync(currentFile,'utf8'),steps:fs.readFileSync(stepsFile,'utf8')}));
-    return {session,stateDir,currentFile,stepsFile,current,steps,root,files,stamp};
+    const stamp=hash(JSON.stringify({files:files.map(f=>[f.relative,f.size,f.mtime,f.ino]),current:fs.readFileSync(currentFile,'utf8'),steps:fs.readFileSync(stepsFile,'utf8'),imageReview}));
+    return {session,stateDir,currentFile,stepsFile,current,steps,root,files,stamp,imageReview};
   }
   function build(ctx) {
     const {root,files}=ctx,moves=[],removals=[],preserved=[];
@@ -142,7 +143,7 @@ export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',
       const next=rewrite(t.text,t.file,nextFile,root,[...moves,...directoryMoves]);
       if(next!==t.text)updates.push({from:t.file,file:nextFile,original:t.text,next});
     }
-    const pending=Array.from({length:13},(_,i)=>i+1).filter(n=>ctx.steps[n]?.state!=='completed');
+    const pending=Array.from({length:13},(_,i)=>i+1).filter(n=>ctx.steps[n]?.state!=='completed'||ctx.imageReview.required?.includes(n));
     return {moves,removals,preserved,updates,pending};
   }
   function preview(session) {
@@ -235,9 +236,20 @@ export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',
     if(expectedProjectPath!==ctx.current.projectPath)fail('현재 작품이 변경되었습니다. 현황표를 새로고침해 주세요.');
     if(locks.has(ctx.root))fail('폴더 정리가 끝난 후 완료를 표시해 주세요.');
     if(ctx.current.workflowOrderVersion!==3)fail('77로 현황표를 다시 열어 단계 순서를 갱신해 주세요.');
-    if(ctx.steps[step]?.state==='completed')return {completed:true,step};
-    const at=new Date().toISOString(),steps={...ctx.steps,[step]:{...ctx.steps[step],state:'completed',completionSource:'user',completedAt:at}};
-    const pending=Array.from({length:13},(_,i)=>i+1).filter(n=>steps[n]?.state!=='completed');
+    const affected=ctx.imageReview.required??[];
+    const review=affected.includes(step);
+    if(review&&affected.some(n=>n===8||n===9))fail('새 이미지의 8·9단계 검수 후 CapCut 인계 완료를 표시해 주세요.');
+    if(ctx.steps[step]?.state==='completed'&&!review)return {completed:true,step};
+    const at=new Date().toISOString();
+    const entry={...ctx.steps[step],state:'completed',completionSource:'user',completedAt:at};
+    if(review){
+      const previous=ctx.steps[step]??{};
+      const {previousCompletions=[],...previousResult}=previous;
+      if(previousResult.state==='completed')entry.previousCompletions=[...previousCompletions,previousResult];
+      entry.reviewedImageRevision=ctx.imageReview.revision;
+    }
+    const steps={...ctx.steps,[step]:entry};
+    const pending=Array.from({length:13},(_,i)=>i+1).filter(n=>steps[n]?.state!=='completed'||(n!==step&&affected.includes(n)));
     const current={...ctx.current,projectStatus:pending.length?'in_progress':'finished',status:pending.length?'awaiting_input':'completed',step:pending[0]||13,nextInput:pending.length?`${pending[0]}단계 작업을 채팅에서 이어가세요.`:'제작 단계 완료 · 폴더 정리 또는 프로젝트 종료를 선택하세요.'};
     if(ctx.current.projectStatus==='closed')current.resumedAt=at;
     const snapshot=path.join(ctx.root,'현황표상태.json'),record=path.join(ctx.root,'00_제작진행.md');

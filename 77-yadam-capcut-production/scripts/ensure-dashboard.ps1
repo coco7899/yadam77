@@ -28,7 +28,7 @@ function Get-DashboardHealth {
 function Test-Dashboard {
     $health = Get-DashboardHealth
     return $health -and $health.service -eq 'lala-yadam-dashboard' -and $health.version -eq 2 -and
-        $health.workflowOrderVersion -eq 3 -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
+        $health.workflowOrderVersion -eq 3 -and $health.sceneImageReviewChoice -eq $true -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
 }
 if (-not (Test-Dashboard)) {
     $health = Get-DashboardHealth
@@ -39,7 +39,7 @@ if (-not (Test-Dashboard)) {
     # Refresh only shipped program files. Saved sessions and channel settings are outside this list.
     $bundledRoot = Join-Path $skillRoot 'assets\dashboard'
     New-Item -ItemType Directory -Path (Join-Path $DashboardRoot 'dist') -Force | Out-Null
-    foreach ($file in @('server.mjs','cleanup.mjs','project-layout.mjs','dist\app.js','dist\index.html','dist\style.css')) {
+    foreach ($file in @('server.mjs','cleanup.mjs','project-layout.mjs','scene-image-review.mjs','dist\app.js','dist\index.html','dist\style.css')) {
         $source = Join-Path $bundledRoot $file
         $target = Join-Path $DashboardRoot $file
         if (-not (Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash) {
