@@ -4,7 +4,39 @@ const expandedSteps=[...currentSteps.slice(0,11),'고정화자 영상제작',cur
 let steps=expandedSteps;
 let projectClosed=false,activeProjectPath=null,projectCloseBusy=false;
 let stageCompleteBusy=null;
+let dashboardRunner={available:false,busy:false,runs:{}};
+let dashboardWork={};
+let dashboardStartBusy=false;
+let dashboardHasSynopsis=false;
+let openStageResult=null;
 const session=new URLSearchParams(location.search).get('session');const query=session?'?session='+encodeURIComponent(session):'';const container=document.getElementById('steps');const cleanupAction=document.getElementById('cleanup-action');let statuses={};let signature='';let fetching=false;
+const resetButton=document.getElementById('project-reset');
+const resetError=document.getElementById('project-reset-error');
+const chatGuide=document.getElementById('chat-guide');
+let resetBusy=false;
+
+resetButton.addEventListener('click',async()=>{
+ if(!session||resetBusy||cleanupBusy||projectCloseBusy||stageCompleteBusy!==null||reviewBusy||dashboardRunner.busy)return;
+ resetBusy=true;
+ resetButton.disabled=true;
+ resetError.hidden=true;
+ try{
+  const response=await fetch('/api/project/reset'+query,{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({expectedProjectPath:activeProjectPath??null})
+  });
+  const result=await response.json();
+  if(!response.ok||!result.reset)throw Error(result.error||'현황표를 리셋하지 못했습니다.');
+  location.reload();
+ }catch(error){
+  resetError.textContent=error.message;
+  resetError.hidden=false;
+  resetBusy=false;
+  resetButton.disabled=false;
+  void refresh();
+ }
+});
+
 const usageNotice=document.getElementById('usage-notice');
 const usageNoticeKey='yadam77.usage-notice.v1';
 let usageNoticeSeen=false;
@@ -82,13 +114,14 @@ function paint(){
  const current=steps.findIndex((_,i)=>!complete(i+1));
  const active=current>=0?statuses[current+1]?.state:null;
  document.getElementById('next').textContent=projectClosed
-  ?'프로젝트 종료 · 다음 이야기는 새 채팅에서'
+  ?'프로젝트 종료 · 상단 리셋으로 새 이야기 시작'
   :current<0?'모든 단계 완료':`${active==='running'?'현재':'다음'} · ${current+1}단계 ${steps[current]}`;
  steps.forEach((title,index)=>{
   const n=index+1;
   const entry=statuses[n]||{};
   const state=entry.state;
   const review=required.has(n);
+  const run=dashboardRunner.runs[n];
   const card=document.createElement('article');
   card.dataset.step=n;
   card.className='step'+(review?' review-required':complete(n)?' done':state==='running'?' running':index===current&&!projectClosed?' next':'');
@@ -105,11 +138,39 @@ function paint(){
   name.style.whiteSpace='pre-line';
   const text=document.createElement('p');
   text.className='state';
-  text.textContent=review
+  text.textContent=run?.phase==='running'?'Codex 작업 중':run?.phase==='failed'||run?.phase==='interrupted'?'다시 실행할 수 있습니다':
+   review
    ?(state==='completed'||entry.previousCompletions?.length?'이전 완료 기록 있음 · 재검수 필요':'재검수 필요')
    :complete(n)?'완료':state==='running'?'작업 중':state==='awaiting_input'?'입력 대기':state==='failed'?'확인이 필요합니다':index===current?'다음 작업':'대기';
   if(review&&imageReview.scenes?.length)text.title='새 장면 이미지: '+imageReview.scenes.join(', ');
   card.append(top,name,text);
+  if(!complete(n)){
+   const runButton=document.createElement('button');
+   runButton.type='button';
+   runButton.className='stage-run';
+   const running=run?.phase==='running';
+   const action=running?'진행 중':run?.phase==='awaiting_input'?'이어서 실행':'시작';
+   const label=`${n}단계 ${title.replaceAll('\n',' ')} ${action}`;
+   const icon=document.createElement('span');
+   icon.className=running?'stage-run-icon is-running':'stage-run-icon';
+   icon.setAttribute('aria-hidden','true');
+   runButton.setAttribute('aria-label',label);
+   runButton.title=label;
+   runButton.append(icon);
+   runButton.disabled=!canStartDashboardStep(n);
+   runButton.addEventListener('click',()=>void startDashboardStage(n));
+   card.append(runButton);
+  }
+  if(run?.resultAvailable&&!(n===2&&dashboardHasSynopsis)){
+   const resultButton=document.createElement('button');
+   resultButton.type='button';
+   resultButton.className='quiet stage-result-toggle';
+   resultButton.textContent=openStageResult?.id===run.id?'접기':'결과 보기';
+   resultButton.setAttribute('aria-expanded',String(openStageResult?.id===run.id));
+   resultButton.setAttribute('aria-controls','stage-result-panel');
+   resultButton.addEventListener('click',()=>void toggleStageResult(n,run));
+   card.append(resultButton);
+  }
   if(n>=10&&n<=12){
    const button=document.createElement('button');
    const blocked=review&&n===10&&(required.has(8)||required.has(9));
@@ -117,23 +178,52 @@ function paint(){
    button.className='stage-complete';
    button.textContent=complete(n)?'완료됨':stageCompleteBusy===n?'저장 중…':'완료';
    button.setAttribute('aria-label',`${n}단계 ${title} ${button.textContent}`);
-   button.disabled=!activeProjectPath||complete(n)||blocked||stageCompleteBusy!==null||cleanupBusy||projectCloseBusy;
+   button.disabled=!activeProjectPath||complete(n)||blocked||stageCompleteBusy!==null||cleanupBusy||projectCloseBusy||dashboardRunner.busy;
    if(blocked)button.title='새 이미지의 8·9단계 검수 후 CapCut 인계를 완료할 수 있어요.';
    button.addEventListener('click',()=>completeStageFromCard(n));
    card.append(button);
   }
   container.insertBefore(card,cleanupAction);
  });
+ if(openStageResult){
+  const {step,id}=openStageResult;
+  const card=container.querySelector(`.step[data-step="${step}"]`);
+  if(card&&dashboardRunner.runs[step]?.id===id&&!(step===2&&dashboardHasSynopsis)){
+   card.after(stageResultPanel);
+   stageResultPanel.hidden=false;
+  }else{
+   openStageResult=null;
+   stageResultPanel.hidden=true;
+  }
+ }
 }
 document.querySelector('.project').after(document.getElementById('topic-choice-template').content.cloneNode(true));
 const topicChoice=document.getElementById('topic-choice');
 const topicForm=document.getElementById('topic-choice-form');
 const topicCandidates=document.getElementById('topic-candidates');
 const topicDurations=document.getElementById('topic-durations');
-const topicSubmit=topicForm.querySelector('button');
-const topicFeedback=document.getElementById('topic-choice-feedback');
+const topicSubmit=topicForm.querySelector('button[type=submit]');
+const topicNext=document.getElementById('topic-next');
+const topicOtherHelp=document.getElementById('topic-other-help');
+const topicListStatus=document.getElementById('topic-list-status');
+const synopsisStage=document.getElementById('synopsis-stage');
+const synopsisTitle=document.getElementById('synopsis-title');
+const synopsisTopic=document.getElementById('synopsis-topic');
+const synopsisStatus=document.getElementById('synopsis-status');
+const synopsisToggle=document.getElementById('synopsis-toggle');
+const synopsisResult=document.getElementById('synopsis-result');
+const synopsisError=document.getElementById('synopsis-error');
+let synopsisSource=null;
 const topicError=document.getElementById('topic-choice-error');
+const stageNotice=document.getElementById('stage-notice');
+const stageResultPanel=document.getElementById('stage-result-panel');
+const stageResultTitle=document.getElementById('stage-result-title');
+const stageResultContent=document.getElementById('stage-result-content');
+const stageFollowup=document.getElementById('stage-followup');
+const stageNote=document.getElementById('stage-note');
 let topicSignature='';
+let topicDurationSignature='';
+let topicBatchNumber=0;
 let topicBusy=false;
 
 function topicRadio(name,value,title,details,summary){
@@ -157,33 +247,174 @@ function topicRadio(name,value,title,details,summary){
 }
 
 function updateTopicButton(){
- topicSubmit.disabled=topicBusy||
+ topicNext.disabled=topicBusy||dashboardRunner.busy;
+ topicSubmit.disabled=topicBusy||dashboardRunner.busy||
   (!topicCandidates.hidden&&!topicCandidates.querySelector('input:checked'))||
   (!topicDurations.hidden&&!topicDurations.querySelector('input:checked'));
 }
 
+function canStartDashboardStep(step,current=dashboardWork){
+ if(!session||!dashboardRunner.available||dashboardRunner.busy||dashboardStartBusy||projectClosed||resetBusy||cleanupBusy||projectCloseBusy||stageCompleteBusy!==null||reviewBusy)return false;
+ if(step===1)return !current.topicSelection?.candidates?.length&&(!current.topic||!current.duration);
+ if(!current.topic||!current.duration)return false;
+ return step===2||Boolean(current.projectPath);
+}
+
+function notifyStage(text){
+ stageNotice.textContent=text;
+ stageNotice.hidden=!text;
+}
+
+async function startDashboardStage(step,note='',current=dashboardWork){
+ if(!canStartDashboardStep(step,current)){
+  if(!dashboardRunner.available)notifyStage('이 PC의 Codex 실행기에 연결할 수 없습니다.');
+  return;
+ }
+ dashboardStartBusy=true;
+ notifyStage('');
+ try{
+  const response=await fetch('/api/steps/run'+query,{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({step,expectedProjectPath:current.projectPath??null,resetAt:current.resetAt??null,note})
+  });
+  const run=await response.json();
+  if(!response.ok)throw Error(run.error);
+  dashboardRunner={...dashboardRunner,busy:true,runs:{...dashboardRunner.runs,[step]:run}};
+  if(openStageResult?.step===step){openStageResult=null;stageResultPanel.hidden=true;}
+  notifyStage(`${step}단계 작업을 시작했습니다. 진행 상황은 현황표에서 확인할 수 있습니다.`);
+ }catch(error){
+  notifyStage(error.message||'Codex 작업을 시작하지 못했습니다.');
+ }finally{
+  dashboardStartBusy=false;
+  signature='';
+  paint();
+  void refresh();
+ }
+}
+
+async function toggleStageResult(step,run){
+ if(openStageResult?.id===run.id){
+  openStageResult=null;
+  stageResultPanel.hidden=true;
+  paint();
+  focusStageResultButton(step);
+  return;
+ }
+ try{
+  const response=await fetch('/api/steps/result'+query+'&step='+step,{cache:'no-store'});
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error);
+  if(dashboardRunner.runs[step]?.id!==run.id)return;
+  openStageResult={step,id:run.id};
+  stageResultTitle.textContent=`${step}단계 작업 결과`;
+  stageResultContent.replaceChildren();
+  renderSynopsis(result.text,stageResultContent);
+  stageNote.value='';
+  stageFollowup.hidden=run.phase!=='awaiting_input';
+  paint();
+  focusStageResultButton(step);
+ }catch(error){notifyStage(error.message||'작업 결과를 불러오지 못했습니다.');}
+}
+
+function focusStageResultButton(step){
+ container.querySelector(`.step[data-step="${step}"] .stage-result-toggle`)?.focus({preventScroll:true});
+}
+
+stageFollowup.addEventListener('submit',event=>{
+ event.preventDefault();
+ if(openStageResult)void startDashboardStage(openStageResult.step,stageNote.value);
+});
+
+function setSynopsisExpanded(expanded){
+ synopsisResult.hidden=!expanded;
+ synopsisToggle.setAttribute('aria-expanded',String(expanded));
+ synopsisToggle.textContent=expanded?'접기':'결과 보기';
+}
+
+function showSynopsis(current,revision=null){
+ const available=Boolean(session&&current.topic&&current.projectPath&&revision);
+ const nextSource=available?JSON.stringify([current.projectPath,revision]):null;
+ if(synopsisSource!==nextSource){
+  synopsisSource=nextSource;
+  synopsisResult.replaceChildren();
+  setSynopsisExpanded(false);
+  synopsisToggle.disabled=false;
+  synopsisError.hidden=true;
+ }
+ synopsisStage.hidden=!(available||(session&&current.step===2&&current.topic));
+ synopsisToggle.hidden=!available;
+ synopsisStatus.hidden=available;
+ if(!synopsisStage.hidden){
+  synopsisTopic.textContent=[current.topic,current.duration].filter(Boolean).join(' · ');
+  synopsisStatus.textContent=current.synopsisSummary||'선택이 저장됐습니다. 시놉시스 준비 단계입니다.';
+ }
+}
+
+function synopsisLine(element,line){
+ for(const [index,part] of line.split(/\*\*(.+?)\*\*/g).entries()){
+  if(index%2===0)element.append(part);
+  else{
+   const strong=document.createElement('strong');
+   strong.textContent=part;
+   element.append(strong);
+  }
+ }
+ return element;
+}
+
+function renderSynopsis(text,target=synopsisResult){
+ for(const line of text.split(/\r?\n/)){
+  if(!line.trim())continue;
+  const heading=line.match(/^(#{1,6})\s+(.+)$/);
+  const tag=heading?`h${Math.min(heading[1].length+2,6)}`:'p';
+  target.append(synopsisLine(document.createElement(tag),heading?.[2]??line));
+ }
+}
+
+synopsisToggle.addEventListener('click',async()=>{
+ if(!synopsisResult.hidden){setSynopsisExpanded(false);return;}
+ if(synopsisResult.hasChildNodes()){setSynopsisExpanded(true);return;}
+ const source=synopsisSource;
+ if(!source)return;
+ synopsisToggle.disabled=true;
+ synopsisToggle.textContent='불러오는 중…';
+ synopsisError.hidden=true;
+ try{
+  const response=await fetch('/api/synopsis'+query,{cache:'no-store'});
+  const result=await response.json();
+  if(source!==synopsisSource)return;
+  if(!response.ok)throw Error(result.error);
+  if(result.revision!==JSON.parse(source)[1])throw Error('시놉시스가 갱신됐습니다. 잠시 후 다시 열어 주세요.');
+  renderSynopsis(result.text);
+  setSynopsisExpanded(true);
+ }catch(error){
+  if(source!==synopsisSource)return;
+  setSynopsisExpanded(false);
+  synopsisError.textContent=error.message||'시놉시스를 불러오지 못했습니다.';
+  synopsisError.hidden=false;
+ }finally{
+  if(source===synopsisSource)synopsisToggle.disabled=false;
+ }
+});
+
 function showTopicChoice(current){
  const selection=current.topicSelection;
- const visible=session&&current.step===1&&current.status==='awaiting_input'&&!current.projectPath&&selection&&
-  (!current.topic||!current.duration||selection.submittedAt);
+ const visible=session&&current.step===1&&current.status==='awaiting_input'&&!current.projectPath&&selection&&!selection.submittedAt&&
+  (!current.topic||!current.duration);
  topicChoice.hidden=!visible;
  const next=visible?JSON.stringify([current.topic,current.duration,selection]):'';
  if(next===topicSignature)return;
  topicSignature=next;
+ if(!visible||selection.submittedAt)topicDurationSignature='';
  if(!visible)return;
  topicError.hidden=true;
- topicForm.hidden=Boolean(selection.submittedAt);
- topicFeedback.hidden=!selection.submittedAt;
- if(selection.submittedAt){
-  topicFeedback.textContent=`${current.topic} · ${current.duration} 저장 완료. 채팅에 ‘다음 단계’를 입력하면 시놉시스를 시작합니다.`;
-  return;
- }
  topicCandidates.hidden=Boolean(current.topic);
  topicDurations.hidden=Boolean(current.duration);
+ topicBatchNumber=selection.batchNumber??0;
+ topicNext.hidden=Boolean(current.topic)||!selection.alternativeBatches?.length;
+ topicOtherHelp.hidden=Boolean(current.topic)||!topicNext.hidden;
  const candidates=topicCandidates.querySelector('.topic-options');
- const durations=topicDurations.querySelector('.topic-options');
  candidates.replaceChildren();
- durations.replaceChildren();
  if(!current.topic){
   for(const candidate of selection.candidates??[]){
    const details=[candidate.genre?.join('·'),candidate.mood?.join('·'),candidate.origin].filter(Boolean).join(' / ');
@@ -192,42 +423,70 @@ function showTopicChoice(current){
    candidates.append(option);
   }
  }
- if(!current.duration){
-  for(const duration of selection.durationOptions??[]){
-   durations.append(topicRadio('duration',duration,duration));
+ const durationSignature=JSON.stringify([current.duration,selection.durationOptions]);
+ if(durationSignature!==topicDurationSignature){
+  topicDurationSignature=durationSignature;
+  const durations=topicDurations.querySelector('.topic-options');
+  durations.replaceChildren();
+  if(!current.duration){
+   for(const duration of selection.durationOptions??[]){
+    durations.append(topicRadio('duration',duration,duration));
+   }
   }
  }
  updateTopicButton();
 }
 
-topicForm.addEventListener('change',updateTopicButton);
-topicForm.addEventListener('submit',async event=>{
- event.preventDefault();
- if(topicSubmit.disabled||topicForm.hidden)return;
- const candidate=topicCandidates.querySelector('input:checked');
- const duration=topicDurations.querySelector('input:checked')?.value;
+async function requestTopicChoice(route,input){
  topicBusy=true;
  updateTopicButton();
  topicError.hidden=true;
  try{
-  const response=await fetch('/api/topic-choice'+query,{
+  const response=await fetch(route+query,{
    method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({candidateNumber:candidate?Number(candidate.value):undefined,candidateTitle:candidate?.dataset.title,duration})
+   body:JSON.stringify(input)
   });
   const result=await response.json();
   if(!response.ok)throw Error(result.error);
   showTopicChoice(result.current);
+  if(result.current.step===2){
+   showSynopsis(result.current);
+   synopsisTitle.focus({preventScroll:true});
+   synopsisStage.scrollIntoView({block:'start'});
+   if(dashboardRunner.available)void startDashboardStage(2,'',result.current);
+  }
+  return true;
  }catch(error){
   topicError.textContent=error.message||'선택을 저장하지 못했어요. 다시 시도해 주세요.';
   topicError.hidden=false;
  }finally{
   topicBusy=false;
   updateTopicButton();
+  signature='';
   void refresh();
+ }
+ return false;
+}
+
+topicForm.addEventListener('change',updateTopicButton);
+topicForm.addEventListener('submit',event=>{
+ event.preventDefault();
+ if(topicSubmit.disabled||topicForm.hidden)return;
+ const candidate=topicCandidates.querySelector('input:checked');
+ const duration=topicDurations.querySelector('input:checked')?.value;
+ void requestTopicChoice('/api/topic-choice',{candidateNumber:candidate?Number(candidate.value):undefined,candidateTitle:candidate?.dataset.title,duration});
+});
+topicNext.addEventListener('click',async()=>{
+ if(topicBusy||topicNext.hidden)return;
+ if(await requestTopicChoice('/api/topic-choice/next',{batchNumber:topicBatchNumber})){
+  topicListStatus.textContent=`${topicBatchNumber+1}번째 주제 후보를 불러왔습니다.`;
+  topicCandidates.querySelector('input')?.focus();
  }
 });
 
-async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;showTopicChoice(current);updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'주제와 길이를 채팅에서 정해주세요';paint()}document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
+async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardHasSynopsis=Boolean(snapshot.synopsisRevision);showTopicChoice(current);updateTopicButton();showSynopsis(current,snapshot.synopsisRevision);
+chatGuide.textContent=dashboardRunner.available?'현황표에서 진행할 단계의 시작 버튼을 누르세요.':current.topic?'채팅에 “다음 단계”를 입력해 이어가세요.':'채팅에 “1”을 입력하면 주제와 길이를 고를 수 있어요.';
+updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'현황표에서 주제와 영상 길이를 골라주세요.';paint()}resetButton.disabled=!session||resetBusy||dashboardRunner.busy;document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
 paint();setTimeout(refresh,0);setInterval(refresh,2500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 
 const channelForm=document.getElementById('channel-form');
@@ -262,7 +521,7 @@ function paintCleanupLabel(completed){
 }
 function updateCleanup(current){
  paintCleanupLabel(Boolean(current.folderCleanup?.at));
- cleanupOpen.disabled=!session||!current.projectPath||cleanupBusy||projectCloseBusy||stageCompleteBusy!==null;
+ cleanupOpen.disabled=!session||!current.projectPath||cleanupBusy||projectCloseBusy||stageCompleteBusy!==null||dashboardRunner.busy;
 }
 async function cleanupRequest(action,input={},signal){
  const response=await fetch('/api/cleanup/'+action+query,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input),signal});
@@ -306,7 +565,7 @@ cleanupConfirm.addEventListener('click',async()=>{
 
 const projectCloseButton=document.getElementById('project-close');
 function updateProjectClose(current){
- projectCloseButton.disabled=!session||!current.projectPath||projectClosed||projectCloseBusy||cleanupBusy;
+ projectCloseButton.disabled=!session||!current.projectPath||projectClosed||projectCloseBusy||cleanupBusy||dashboardRunner.busy;
  projectCloseButton.textContent=projectClosed?'프로젝트 종료 완료':projectCloseBusy?'종료 중…':'이 프로젝트 종료';
  document.getElementById('project-closed-message').hidden=!projectClosed;
  document.querySelector('.project-info .label').textContent=projectClosed?'종료된 작품':'진행 중인 작품';

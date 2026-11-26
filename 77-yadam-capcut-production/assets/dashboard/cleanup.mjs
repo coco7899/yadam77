@@ -102,13 +102,21 @@ export function recycleWindows(files) {
 
 export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',recycle=recycleWindows,reviewImages=()=>({})}) {
   const plans=new Map(),locks=new Set();
-  function context(session) {
+  function sessionFiles(session) {
     if(!/^[a-zA-Z0-9_-]{1,96}$/.test(session||''))fail('현재 채팅이 확인되지 않습니다. 77로 현황표를 다시 열어 주세요.');
-    const stateDir=path.join(stateBase,'sessions',session),currentFile=path.join(stateDir,'current-work.json'),stepsFile=path.join(stateDir,'steps.json');
+    const stateDir=path.join(stateBase,'sessions',session);
+    return {stateDir,currentFile:path.join(stateDir,'current-work.json'),stepsFile:path.join(stateDir,'steps.json')};
+  }
+  function projectRoot(projectPath) {
+    const requested=path.resolve(projectPath),base=fs.realpathSync(allowedRoot),root=fs.realpathSync(requested);
+    if(!within(base,root)||requested.toLowerCase()!==root.toLowerCase()||!fs.statSync(root).isDirectory())fail('작품 폴더 경로를 확인해 주세요.');
+    return root;
+  }
+  function context(session) {
+    const {stateDir,currentFile,stepsFile}=sessionFiles(session);
     const current=json(currentFile), steps=json(stepsFile);
     if(!current.projectPath)fail('현재 채팅에서 작품을 먼저 선택해 주세요.');
-    const requested=path.resolve(current.projectPath),base=fs.realpathSync(allowedRoot),root=fs.realpathSync(requested);
-    if(!within(base,root)||requested.toLowerCase()!==root.toLowerCase())fail('작품 폴더 범위를 벗어나거나 연결 경로입니다. 정리를 중단했습니다.');
+    const root=projectRoot(current.projectPath);
     const imageReview=reviewImages(stateDir,current,steps);
     const files=inventory(root);
     const stamp=hash(JSON.stringify({files:files.map(f=>[f.relative,f.size,f.mtime,f.ino]),current:fs.readFileSync(currentFile,'utf8'),steps:fs.readFileSync(stepsFile,'utf8'),imageReview}));
@@ -262,5 +270,31 @@ export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',
     } catch(error){for(const [file,original] of originals){if(original)atomic(file,original);else if(fs.existsSync(file))fs.unlinkSync(file);}throw error;}
     return {completed:true,step,resumed:ctx.current.projectStatus==='closed'};
   }
-  return {preview,execute,closeProject,completeStage};
+  function resetProject(session,expectedProjectPath) {
+    const {currentFile,stepsFile}=sessionFiles(session);
+    const current=json(currentFile);
+    const selectedProjectPath=current.projectPath??null;
+    if((current.dashboardSession&&current.dashboardSession!==session)||selectedProjectPath!==expectedProjectPath)fail('현재 작품이 변경되었습니다. 현황표를 새로고침해 주세요.');
+    const previousSteps=fs.readFileSync(stepsFile);
+    if(selectedProjectPath){
+      const root=projectRoot(selectedProjectPath);
+      if(locks.has(root))fail('폴더 정리가 끝난 후 새 이야기를 시작해 주세요.');
+      atomic(path.join(root,'현황표상태.json'),JSON.stringify({steps:json(stepsFile),currentWork:current,chatId:session},null,2)+'\n');
+    }
+    const resetAt=new Date().toISOString();
+    const next={
+      skill:'77-yadam-capcut-production',workflowOrderVersion:3,dashboardSession:session,
+      step:0,status:'idle',projectPath:null,topic:null,duration:null,
+      nextInput:'1단계 주제·길이 선택',interactionMode:'chat_with_read_only_dashboard',resetAt
+    };
+    atomic(stepsFile,'{}\n');
+    try {
+      atomic(currentFile,JSON.stringify(next,null,2)+'\n');
+    } catch(error) {
+      atomic(stepsFile,previousSteps);
+      throw error;
+    }
+    return {reset:true};
+  }
+  return {preview,execute,closeProject,completeStage,resetProject};
 }

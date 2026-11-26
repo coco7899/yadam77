@@ -21,25 +21,53 @@ $workspaceRoot = [IO.Path]::GetFullPath($workspaceRoot)
 if (-not $DashboardRoot) { $DashboardRoot = Join-Path $workspaceRoot '야담제작소웹' }
 $DashboardRoot = [IO.Path]::GetFullPath($DashboardRoot)
 $serverPath = Join-Path $DashboardRoot 'server.mjs'
-function Get-DashboardHealth {
-    try { Invoke-RestMethod -Uri "$baseUrl/api/health" -TimeoutSec 2 }
+if (-not ('System.Net.Http.HttpClient' -as [type])) { Add-Type -AssemblyName System.Net.Http }
+$httpHandler = [Net.Http.HttpClientHandler]::new()
+$httpHandler.UseProxy = $false
+$http = [Net.Http.HttpClient]::new($httpHandler)
+
+function Read-DashboardJson([string]$Route, [int]$TimeoutMs) {
+    $cancel = [Threading.CancellationTokenSource]::new($TimeoutMs)
+    try {
+        $response = $http.GetAsync("$baseUrl$Route", $cancel.Token).GetAwaiter().GetResult()
+        try {
+            $null = $response.EnsureSuccessStatusCode()
+            return $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
+        } finally { $response.Dispose() }
+    } finally { $cancel.Dispose() }
+}
+
+function Test-DashboardPortInUse {
+    $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    return $listeners.Port -contains $DashboardPort
+}
+
+function Get-DashboardHealth([int]$TimeoutMs = 700) {
+    try { Read-DashboardJson '/api/health' $TimeoutMs }
     catch { return $null }
 }
-function Test-Dashboard {
-    $health = Get-DashboardHealth
+
+function Test-Dashboard($health) {
     return $health -and $health.service -eq 'lala-yadam-dashboard' -and $health.version -eq 2 -and
-        $health.workflowOrderVersion -eq 3 -and $health.sceneImageReviewChoice -eq $true -and $health.usageNoticeVersion -eq 1 -and $health.topicChoice -eq $true -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
+        $health.workflowOrderVersion -eq 3 -and $health.sceneImageReviewChoice -eq $true -and $health.usageNoticeVersion -eq 1 -and $health.projectReset -eq $true -and $health.topicChoiceVersion -eq 3 -and $health.synopsisReader -eq $true -and $health.stageRunner -eq $true -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
 }
-if (-not (Test-Dashboard)) {
+
+function Confirm-RunningDashboard {
+    if (-not (Test-DashboardPortInUse)) { return $false }
     $health = Get-DashboardHealth
-    $listener = Get-NetTCPConnection -LocalPort $DashboardPort -State Listen -ErrorAction SilentlyContinue
-    if ($health -or $listener) {
+    if (-not $health) { $health = Get-DashboardHealth 2000 }
+    if (-not (Test-Dashboard $health)) {
         throw "$DashboardPort 포트에 기존 서버가 실행 중입니다. 이 작업실의 이전 현황표 서버를 직접 종료한 뒤 다시 실행하세요."
     }
+    return $true
+}
+
+$serverRunning = Confirm-RunningDashboard
+if (-not $serverRunning) {
     # Refresh only shipped program files. Saved sessions and channel settings are outside this list.
     $bundledRoot = Join-Path $skillRoot 'assets\dashboard'
     New-Item -ItemType Directory -Path (Join-Path $DashboardRoot 'dist') -Force | Out-Null
-    foreach ($file in @('server.mjs','cleanup.mjs','project-layout.mjs','scene-image-review.mjs','dist\app.js','dist\index.html','dist\style.css')) {
+    foreach ($file in @('server.mjs','cleanup.mjs','project-layout.mjs','scene-image-review.mjs','stage-runner.mjs','dist\app.js','dist\index.html','dist\style.css')) {
         $source = Join-Path $bundledRoot $file
         $target = Join-Path $DashboardRoot $file
         if (-not (Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash) {
@@ -51,6 +79,10 @@ $stateDir = Join-Path $DashboardRoot "state\sessions\$ChatId"
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 $statusPath = Join-Path $stateDir 'steps.json'
 $currentPath = Join-Path $stateDir 'current-work.json'
+if ($NewSession -and $serverRunning) {
+    $activeSnapshot = Read-DashboardJson "/api/snapshot?session=$ChatId" 3000
+    if ($activeSnapshot.runner.busy) { throw '실행 중인 야담 작업이 끝난 뒤 새 이야기를 시작해 주세요.' }
+}
 if ($NewSession -or -not (Test-Path -LiteralPath $statusPath)) {
     if ($NewSession -and (Test-Path -LiteralPath $statusPath) -and (Test-Path -LiteralPath $currentPath)) {
         $previous = Get-Content -LiteralPath $currentPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -59,7 +91,7 @@ if ($NewSession -or -not (Test-Path -LiteralPath $statusPath)) {
         }
     }
     [IO.File]::WriteAllText($statusPath,'{}')
-    @{skill='77-yadam-capcut-production';workflowOrderVersion=3;dashboardSession=$ChatId;step=0;status='idle';projectPath=$null;topic=$null;duration=$null;nextInput='1단계 주제·길이 선택';interactionMode='chat_with_read_only_dashboard'} | ConvertTo-Json | Set-Content -LiteralPath $currentPath -Encoding utf8
+    @{skill='77-yadam-capcut-production';workflowOrderVersion=3;dashboardSession=$ChatId;step=0;status='idle';projectPath=$null;topic=$null;duration=$null;nextInput='1단계 주제·길이 선택';interactionMode='chat_with_read_only_dashboard';resetAt=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath $currentPath -Encoding utf8
 }
 # Migrate only this chat to the 13-stage workflow.
 if (Test-Path -LiteralPath $currentPath) {
@@ -112,29 +144,45 @@ if (Test-Path -LiteralPath $currentPath) {
 }
 
 $started = $false
-if (-not (Test-Dashboard)) {
+if (-not $serverRunning -and -not (Confirm-RunningDashboard)) {
     $node = (Get-Command node -ErrorAction Stop).Source
     $runtime = Join-Path $DashboardRoot '.runtime'
     New-Item -ItemType Directory -Path $runtime -Force | Out-Null
     $previousPort = $env:PORT
     $previousWorkspace = $env:YADAM_WORKSPACE_ROOT
+    $previousSkill = $env:YADAM_SKILL_ROOT
     try {
         $env:PORT = [string]$DashboardPort
         $env:YADAM_WORKSPACE_ROOT = $workspaceRoot
+        $env:YADAM_SKILL_ROOT = $skillRoot
         $process = Start-Process -FilePath $node -ArgumentList @(('"' + $serverPath + '"')) -WorkingDirectory $DashboardRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtime 'server.log') -RedirectStandardError (Join-Path $runtime 'server-error.log')
     } finally {
         $env:PORT = $previousPort
         $env:YADAM_WORKSPACE_ROOT = $previousWorkspace
+        $env:YADAM_SKILL_ROOT = $previousSkill
     }
-    $started = $true
-    $ready = $false
-    for ($attempt=0; $attempt -lt 8; $attempt++) {
-        if (Test-Dashboard) { $ready=$true; break }
-        Start-Sleep -Milliseconds 300
+    $readyHealth = $null
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while ($timer.ElapsedMilliseconds -lt 5000) {
+        if (Test-DashboardPortInUse) {
+            $health = Get-DashboardHealth
+            if (Test-Dashboard $health) { $readyHealth = $health; break }
+        }
+        if ($process.HasExited -and -not (Test-DashboardPortInUse)) { break }
+        Start-Sleep -Milliseconds 45
     }
-    if (-not $ready) { throw '현황표 시작을 확인하지 못했습니다. .runtime/server-error.log를 확인하세요.' }
-    [IO.File]::WriteAllText((Join-Path $runtime 'server.pid'),[string]$process.Id)
+    if (-not $readyHealth) { throw '현황표 시작을 확인하지 못했습니다. .runtime/server-error.log를 확인하세요.' }
+    $started = $readyHealth.pid -eq $process.Id
+    if ($started) { [IO.File]::WriteAllText((Join-Path $runtime 'server.pid'),[string]$process.Id) }
 }
-$check = Invoke-RestMethod -Uri "$baseUrl/api/snapshot?session=$ChatId" -TimeoutSec 2
-if ($check.session -ne $ChatId) { throw '채팅별 현황표 연결 검증 실패' }
-@{url=$dashboardUrl;chat_id=$ChatId;channel_name=$check.channelName;dashboard_root=$DashboardRoot;status_path=$statusPath;current_work_path=$currentPath;started=$started;reset=[bool]$NewSession;ready=$true} | ConvertTo-Json -Compress
+
+# Verify the session without triggering a scan of project images.
+$check = Read-DashboardJson "/api/current?session=$ChatId" 2000
+if ($check.dashboardSession -and $check.dashboardSession -ne $ChatId) { throw '채팅별 현황표 연결 검증 실패' }
+$channelName = ''
+$profile = Join-Path $DashboardRoot 'state\channel-profile.json'
+if (Test-Path -LiteralPath $profile) {
+    $channelName = (Get-Content -LiteralPath $profile -Raw -Encoding UTF8 | ConvertFrom-Json).channelName
+}
+$http.Dispose()
+@{url=$dashboardUrl;chat_id=$ChatId;channel_name=$channelName;dashboard_root=$DashboardRoot;status_path=$statusPath;current_work_path=$currentPath;started=$started;reset=[bool]$NewSession;ready=$true} | ConvertTo-Json -Compress

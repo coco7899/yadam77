@@ -1,26 +1,49 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ed6b2f"><title>LALA 야담제작 진행현황표 77</title><link rel="stylesheet" href="style.css"></head><body><div class="board"><header><div class="identity"><span class="logo" aria-hidden="true">L</span><div><h1>LALA 야담제작 진행현황표 77</h1><p class="subtitle">이야기의 시작부터 영상 완성까지</p></div></div><span class="mode">77 야담 스킬</span></header><form id="channel-form" class="channel-form"><div><label for="channel-name">채널 이름</label><p id="channel-status" role="status">이 컴퓨터에 저장됩니다.</p></div><input id="channel-name" maxlength="80" placeholder="채널 이름을 입력하세요" required><button type="submit">저장</button></form><section class="project" aria-label="현재 작품과 진행률"><div class="project-info"><span class="label">진행 중인 작품</span><h2>작품 선택 전</h2><p>주제와 길이를 채팅에서 정해주세요</p></div><div class="summary"><div class="progress-top"><span>전체 진행</span><strong id="progress">— / 13</strong></div><progress id="meter" max="13" value="0" aria-label="완료한 제작 단계"></progress><span id="next">현황 불러오는 중</span></div></section><section id="image-review-prompt" class="image-review-prompt" aria-labelledby="image-review-title" hidden>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ed6b2f"><title>LALA 야담제작 진행현황표 77</title><link rel="stylesheet" href="style.css"></head><body><div class="board"><header><div class="identity"><span class="logo" aria-hidden="true">L</span><div><h1>LALA 야담제작 진행현황표 77</h1><p class="subtitle">이야기의 시작부터 영상 완성까지</p></div></div><button class="project-reset" id="project-reset" type="button" disabled>리셋 · 새 이야기</button></header><p id="project-reset-error" role="alert" hidden></p><form id="channel-form" class="channel-form"><div><label for="channel-name">채널 이름</label><p id="channel-status" role="status">이 컴퓨터에 저장됩니다.</p></div><input id="channel-name" maxlength="80" placeholder="채널 이름을 입력하세요" required><button type="submit">저장</button></form><section class="project" aria-label="현재 작품과 진행률"><div class="project-info"><span class="label">진행 중인 작품</span><h2>작품 선택 전</h2><p>현황표에서 주제와 영상 길이를 골라주세요.</p></div><div class="summary"><div class="progress-top"><span>전체 진행</span><strong id="progress">— / 13</strong></div><progress id="meter" max="13" value="0" aria-label="완료한 제작 단계"></progress><span id="next">현황 불러오는 중</span></div></section><section id="image-review-prompt" class="image-review-prompt" aria-labelledby="image-review-title" hidden>
 <div role="status"><h2 id="image-review-title">새 장면 이미지가 감지되었습니다</h2>
 <p id="image-review-scenes"></p><p>새 이미지로 8~10단계를 다시 진행할까요? 어느 쪽을 선택해도 이전 결과와 완료 기록은 보관됩니다.</p></div>
 <div class="image-review-actions">
 <button type="button" id="image-review-restart">8~10단계 다시 진행</button>
 <button type="button" id="image-review-keep" class="quiet">기존 결과 유지</button>
 </div><p id="image-review-error" role="alert" hidden></p>
-</section><div class="section-heading"><h2>제작 단계</h2><span>작업은 옆 채팅에서 진행합니다</span></div><main id="steps" aria-label="야담 제작 단계별 현황"><div class="cleanup-action" id="cleanup-action"><button id="cleanup-open" type="button" disabled>최종 폴더 정리·프로젝트 마무리</button></div></main><footer><span id="connection" role="status">현황에 연결하는 중…</span><span>채팅에 <strong>“다음 단계”</strong>를 입력해 이어가세요.</span></footer><section class="project-finish" aria-label="프로젝트 종료"><button id="project-close" type="button" disabled>이 프로젝트 종료</button><p class="finish-help">외부 캡컷에서 작업을 마쳤다면 종료할 수 있습니다. 종료 후에도 이 채팅에서 언제든 추가 작업을 요청하세요.</p><p id="project-close-error" role="alert"></p><div id="project-closed-message" role="status" hidden>100만유튜버 화이팅!! 새채팅에서 프로젝트를 시작해주세요</div></section></div><dialog id="cleanup-dialog" aria-labelledby="cleanup-dialog-title"><div class="dialog-heading"><div><span class="label">정리 전 확인</span><h2 id="cleanup-dialog-title">현재 작품 폴더 정리</h2></div><button id="cleanup-close" class="quiet" aria-label="닫기" type="button">닫기</button></div><p id="cleanup-project" class="folder-path"></p><p id="cleanup-note"></p><div id="cleanup-plan"></div><p id="cleanup-pending" class="pending-note"></p><p id="cleanup-error" role="alert"></p><div class="dialog-actions"><button id="cleanup-cancel" type="button" class="quiet">취소</button><button id="cleanup-confirm" type="button" disabled>정리 실행</button></div></dialog><dialog id="usage-notice" aria-labelledby="usage-notice-title" style="max-width:min(460px,calc(100vw - 32px))">
+</section><div class="section-heading"><h2>제작 단계</h2><span>필요한 단계에서 시작을 누르세요.</span></div><main id="steps" aria-label="야담 제작 단계별 현황"><div class="cleanup-action" id="cleanup-action"><button id="cleanup-open" type="button" disabled>최종 폴더 정리·프로젝트 마무리</button></div></main><footer><span id="connection" role="status">현황에 연결하는 중…</span><span><span id="chat-guide">채팅에서 제작을 이어가세요.</span></span></footer><section class="project-finish" aria-label="프로젝트 종료"><button id="project-close" type="button" disabled>이 프로젝트 종료</button><p class="finish-help">외부 캡컷에서 작업을 마쳤다면 종료할 수 있습니다. 종료 후에도 이 채팅에서 언제든 추가 작업을 요청하세요.</p><p id="project-close-error" role="alert"></p><div id="project-closed-message" role="status" hidden>100만유튜버 화이팅!! 새채팅에서 프로젝트를 시작해주세요</div></section></div><dialog id="cleanup-dialog" aria-labelledby="cleanup-dialog-title"><div class="dialog-heading"><div><span class="label">정리 전 확인</span><h2 id="cleanup-dialog-title">현재 작품 폴더 정리</h2></div><button id="cleanup-close" class="quiet" aria-label="닫기" type="button">닫기</button></div><p id="cleanup-project" class="folder-path"></p><p id="cleanup-note"></p><div id="cleanup-plan"></div><p id="cleanup-pending" class="pending-note"></p><p id="cleanup-error" role="alert"></p><div class="dialog-actions"><button id="cleanup-cancel" type="button" class="quiet">취소</button><button id="cleanup-confirm" type="button" disabled>정리 실행</button></div></dialog><dialog id="usage-notice" aria-labelledby="usage-notice-title" style="max-width:min(460px,calc(100vw - 32px))">
 <h2 id="usage-notice-title">사용 권한 안내</h2>
 <p>이 자료는 제작자가 허락한 범위에서만 사용할 수 있습니다. 사전 허락 없이 사용·복제·수정·재배포하거나 다른 사람에게 공유하지 마세요.</p>
 <form method="dialog" class="dialog-actions"><button type="submit">확인</button></form>
 </dialog>
 <template id="topic-choice-template">
+  <p id="stage-notice" role="status" hidden></p>
   <section id="topic-choice" class="topic-choice" aria-labelledby="topic-choice-title" hidden>
     <h2 id="topic-choice-title">1단계. 주제와 영상 길이</h2>
     <form id="topic-choice-form" autocomplete="off">
-      <fieldset id="topic-candidates"><legend>이야기 주제</legend><div class="topic-options"></div></fieldset>
+      <fieldset id="topic-candidates">
+        <legend>이야기 주제</legend>
+        <div class="topic-options"></div>
+        <button type="button" id="topic-next" class="quiet" hidden>다른 주제 보기</button>
+        <p id="topic-other-help" hidden>후보를 더 보고 싶으면 채팅에 ‘다른 주제’라고 입력해 주세요.</p>
+        <span id="topic-list-status" class="topic-visually-hidden" role="status"></span>
+      </fieldset>
       <fieldset id="topic-durations"><legend>영상 길이</legend><div class="topic-options duration-options"></div></fieldset>
       <button type="submit" disabled>선택 저장</button>
     </form>
-    <p id="topic-choice-feedback" role="status" hidden></p>
     <p id="topic-choice-error" role="alert" hidden></p>
+  </section>
+  <section id="synopsis-stage" class="topic-choice" aria-labelledby="synopsis-title" hidden>
+    <h2 id="synopsis-title" tabindex="-1">2단계. 시놉시스</h2>
+    <p id="synopsis-topic"></p>
+    <p id="synopsis-status" role="status"></p>
+    <button type="button" id="synopsis-toggle" class="quiet" aria-expanded="false" aria-controls="synopsis-result" hidden>결과 보기</button>
+    <p id="synopsis-error" role="alert" hidden></p>
+    <div id="synopsis-result" hidden></div>
+  </section>
+  <section id="stage-result-panel" aria-labelledby="stage-result-title" hidden>
+    <h2 id="stage-result-title"></h2>
+    <div id="stage-result-content"></div>
+    <form id="stage-followup" hidden>
+      <label for="stage-note">필요한 자료 경로나 확인 내용을 입력하세요</label>
+      <textarea id="stage-note" rows="3" maxlength="1000"></textarea>
+      <button type="submit">이어서 실행</button>
+    </form>
   </section>
 </template>
 <script src="app.js"></script></body></html>
