@@ -10,4 +10,17 @@
 <h2 id="usage-notice-title">사용 권한 안내</h2>
 <p>이 자료는 제작자가 허락한 범위에서만 사용할 수 있습니다. 사전 허락 없이 사용·복제·수정·재배포하거나 다른 사람에게 공유하지 마세요.</p>
 <form method="dialog" class="dialog-actions"><button type="submit">확인</button></form>
-</dialog><script src="app.js"></script></body></html>
+</dialog>
+<template id="topic-choice-template">
+  <section id="topic-choice" class="topic-choice" aria-labelledby="topic-choice-title" hidden>
+    <h2 id="topic-choice-title">1단계. 주제와 영상 길이</h2>
+    <form id="topic-choice-form" autocomplete="off">
+      <fieldset id="topic-candidates"><legend>이야기 주제</legend><div class="topic-options"></div></fieldset>
+      <fieldset id="topic-durations"><legend>영상 길이</legend><div class="topic-options duration-options"></div></fieldset>
+      <button type="submit" disabled>선택 저장</button>
+    </form>
+    <p id="topic-choice-feedback" role="status" hidden></p>
+    <p id="topic-choice-error" role="alert" hidden></p>
+  </section>
+</template>
+<script src="app.js"></script></body></html>

@@ -28,7 +28,7 @@ function Get-DashboardHealth {
 function Test-Dashboard {
     $health = Get-DashboardHealth
     return $health -and $health.service -eq 'lala-yadam-dashboard' -and $health.version -eq 2 -and
-        $health.workflowOrderVersion -eq 3 -and $health.sceneImageReviewChoice -eq $true -and $health.usageNoticeVersion -eq 1 -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
+        $health.workflowOrderVersion -eq 3 -and $health.sceneImageReviewChoice -eq $true -and $health.usageNoticeVersion -eq 1 -and $health.topicChoice -eq $true -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
 }
 if (-not (Test-Dashboard)) {
     $health = Get-DashboardHealth

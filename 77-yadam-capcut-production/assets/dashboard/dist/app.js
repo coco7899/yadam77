@@ -125,7 +125,109 @@ function paint(){
   container.insertBefore(card,cleanupAction);
  });
 }
-async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'주제와 길이를 채팅에서 정해주세요';paint()}document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
+document.querySelector('.project').after(document.getElementById('topic-choice-template').content.cloneNode(true));
+const topicChoice=document.getElementById('topic-choice');
+const topicForm=document.getElementById('topic-choice-form');
+const topicCandidates=document.getElementById('topic-candidates');
+const topicDurations=document.getElementById('topic-durations');
+const topicSubmit=topicForm.querySelector('button');
+const topicFeedback=document.getElementById('topic-choice-feedback');
+const topicError=document.getElementById('topic-choice-error');
+let topicSignature='';
+let topicBusy=false;
+
+function topicRadio(name,value,title,details,summary){
+ const label=document.createElement('label');
+ const radio=document.createElement('input');
+ radio.type='radio';
+ radio.name=name;
+ radio.value=value;
+ radio.required=true;
+ const text=document.createElement('span');
+ const heading=document.createElement('strong');
+ heading.textContent=title;
+ text.append(heading);
+ for(const line of [details,summary].filter(Boolean)){
+  const description=document.createElement('span');
+  description.textContent=line;
+  text.append(description);
+ }
+ label.append(radio,text);
+ return label;
+}
+
+function updateTopicButton(){
+ topicSubmit.disabled=topicBusy||
+  (!topicCandidates.hidden&&!topicCandidates.querySelector('input:checked'))||
+  (!topicDurations.hidden&&!topicDurations.querySelector('input:checked'));
+}
+
+function showTopicChoice(current){
+ const selection=current.topicSelection;
+ const visible=session&&current.step===1&&current.status==='awaiting_input'&&!current.projectPath&&selection&&
+  (!current.topic||!current.duration||selection.submittedAt);
+ topicChoice.hidden=!visible;
+ const next=visible?JSON.stringify([current.topic,current.duration,selection]):'';
+ if(next===topicSignature)return;
+ topicSignature=next;
+ if(!visible)return;
+ topicError.hidden=true;
+ topicForm.hidden=Boolean(selection.submittedAt);
+ topicFeedback.hidden=!selection.submittedAt;
+ if(selection.submittedAt){
+  topicFeedback.textContent=`${current.topic} · ${current.duration} 저장 완료. 채팅에 ‘다음 단계’를 입력하면 시놉시스를 시작합니다.`;
+  return;
+ }
+ topicCandidates.hidden=Boolean(current.topic);
+ topicDurations.hidden=Boolean(current.duration);
+ const candidates=topicCandidates.querySelector('.topic-options');
+ const durations=topicDurations.querySelector('.topic-options');
+ candidates.replaceChildren();
+ durations.replaceChildren();
+ if(!current.topic){
+  for(const candidate of selection.candidates??[]){
+   const details=[candidate.genre?.join('·'),candidate.mood?.join('·'),candidate.origin].filter(Boolean).join(' / ');
+   const option=topicRadio('candidate',candidate.number,`${candidate.number}번 · ${candidate.title}`,details,candidate.summary);
+   option.querySelector('input').dataset.title=candidate.title;
+   candidates.append(option);
+  }
+ }
+ if(!current.duration){
+  for(const duration of selection.durationOptions??[]){
+   durations.append(topicRadio('duration',duration,duration));
+  }
+ }
+ updateTopicButton();
+}
+
+topicForm.addEventListener('change',updateTopicButton);
+topicForm.addEventListener('submit',async event=>{
+ event.preventDefault();
+ if(topicSubmit.disabled||topicForm.hidden)return;
+ const candidate=topicCandidates.querySelector('input:checked');
+ const duration=topicDurations.querySelector('input:checked')?.value;
+ topicBusy=true;
+ updateTopicButton();
+ topicError.hidden=true;
+ try{
+  const response=await fetch('/api/topic-choice'+query,{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({candidateNumber:candidate?Number(candidate.value):undefined,candidateTitle:candidate?.dataset.title,duration})
+  });
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error);
+  showTopicChoice(result.current);
+ }catch(error){
+  topicError.textContent=error.message||'선택을 저장하지 못했어요. 다시 시도해 주세요.';
+  topicError.hidden=false;
+ }finally{
+  topicBusy=false;
+  updateTopicButton();
+  void refresh();
+ }
+});
+
+async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;showTopicChoice(current);updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'주제와 길이를 채팅에서 정해주세요';paint()}document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
 paint();setTimeout(refresh,0);setInterval(refresh,2500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 
 const channelForm=document.getElementById('channel-form');

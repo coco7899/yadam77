@@ -19,19 +19,41 @@ const cleanup=createCleanup({
 const profilePath=path.join(base,'channel-profile.json');
 function read(file,fallback={}){try{return JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''))}catch(e){if(e.code==='ENOENT')return fallback;throw e}}
 function reply(res,code,data){res.writeHead(code,{'Content-Type':'application/json;charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data))}
+function saveTopicChoice(session,stateDir,input){
+ if(!session)throw Error('현재 채팅을 확인해 주세요.');
+ const currentPath=path.join(stateDir,'current-work.json');
+ const current=read(currentPath);
+ const selection=current.topicSelection;
+ if(current.dashboardSession!==session||current.projectPath||current.step!==1||current.status!=='awaiting_input'||!selection||selection.submittedAt){
+  throw Error('저장할 선택이 없습니다. 현황표를 새로고침해 주세요.');
+ }
+ const candidate=selection.candidates?.find(item=>item.number===input.candidateNumber&&item.title===input.candidateTitle);
+ if(!current.topic&&!candidate)throw Error('주제를 하나 골라 주세요.');
+ if(!current.duration&&!selection.durationOptions?.includes(input.duration))throw Error('영상 길이를 하나 골라 주세요.');
+ current.topic ||= candidate.title;
+ current.duration ||= input.duration;
+ current.nextInput='채팅에서 다음 단계 진행';
+ selection.submittedAt=new Date().toISOString();
+ if(candidate)selection.selectedCandidateNumber=candidate.number;
+ const temp=currentPath+'.topic-choice.tmp';
+ fs.writeFileSync(temp,JSON.stringify(current,null,2)+'\n');
+ fs.renameSync(temp,currentPath);
+ return current;
+}
 http.createServer(async(req,res)=>{
  if(![`127.0.0.1:${port}`,`localhost:${port}`].includes(req.headers.host))return reply(res,403,{error:'Local access only'});
  const url=new URL(req.url,`http://127.0.0.1:${port}`);const route=url.pathname;
- if(route==='/api/health')return reply(res,200,{service:'lala-yadam-dashboard',version:2,workflowOrderVersion:3,sceneImageReview:true,sceneImageReviewChoice:true,usageNoticeVersion:1,pid:process.pid,root});
+ if(route==='/api/health')return reply(res,200,{service:'lala-yadam-dashboard',version:2,workflowOrderVersion:3,sceneImageReview:true,sceneImageReviewChoice:true,usageNoticeVersion:1,topicChoice:true,pid:process.pid,root});
  const session=url.searchParams.get('session');
  if(session!==null&&!/^[a-zA-Z0-9_-]{1,96}$/.test(session))return reply(res,400,{error:'Invalid session'});
  const stateDir=session?path.join(base,'sessions',session):base;
- if(route==='/api/channel'||route==='/api/cleanup/preview'||route==='/api/cleanup/execute'||route==='/api/project/close'||route==='/api/steps/complete'||route==='/api/image-review/decision'){
+ if(route==='/api/channel'||route==='/api/cleanup/preview'||route==='/api/cleanup/execute'||route==='/api/project/close'||route==='/api/steps/complete'||route==='/api/image-review/decision'||route==='/api/topic-choice'){
   if(req.method!=='POST')return reply(res,405,{error:'POST only'});
   if(req.headers.origin!==`http://${req.headers.host}`||!req.headers['content-type']?.startsWith('application/json'))return reply(res,403,{error:'현황표에서 직접 실행해 주세요.'});
   try{
    let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>4096)throw Error('요청이 너무 큽니다.');}
    const input=JSON.parse(body||'{}');
+   if(route==='/api/topic-choice')return reply(res,200,{current:saveTopicChoice(session,stateDir,input)});
    if(route==='/api/image-review/decision'){
     if(!session)throw Error('현재 채팅을 확인해 주세요.');
     const current=read(path.join(stateDir,'current-work.json'));
