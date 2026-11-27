@@ -296,5 +296,57 @@ export function createCleanup({stateBase,allowedRoot='D:\\1CODEX\\야담작업',
     }
     return {reset:true};
   }
-  return {preview,execute,closeProject,completeStage,resetProject};
+
+  function restartStage(session,{step,expectedProjectPath,resetAt:expectedResetAt},{carryFields=[]}={}) {
+    if(!Number.isInteger(step)||step<1||step>13)fail('초기화할 단계를 확인해 주세요.');
+    const {stateDir,currentFile,stepsFile}=sessionFiles(session);
+    const current=json(currentFile), steps=json(stepsFile);
+    if(current.dashboardSession!==session||(current.projectPath??null)!==expectedProjectPath||(current.resetAt??null)!==expectedResetAt){
+      fail('현재 작품이 바뀌었습니다. 현황표를 새로고침해 주세요.');
+    }
+    if(step===1){
+      resetProject(session,expectedProjectPath);
+      return {reset:true,step,resetAt:json(currentFile).resetAt};
+    }
+    if(!current.topic||!current.duration||(step>2&&!current.projectPath))fail('먼저 주제와 길이를 정하고 작품을 시작해 주세요.');
+    const root=current.projectPath?projectRoot(current.projectPath):null;
+    if(root&&locks.has(root))fail('폴더 정리가 끝난 뒤 다시 시작해 주세요.');
+    const at=new Date().toISOString();
+    const retained=['skill','workflowOrderVersion','dashboardSession','projectPath','topic','duration',
+      'interactionMode','topicSelection','genre','mood','origin',...carryFields];
+    const next={
+      ...Object.fromEntries(retained.filter(key=>Object.hasOwn(current,key)).map(key=>[key,current[key]])),
+      projectStatus:'in_progress',status:'awaiting_input',step,resetAt:at,
+      restartFromStep:Math.min(step,current.restartFromStep??(current.dubbingRestartAt?4:step)),
+      nextInput:`준비되면 ${step}단계의 시작을 누르세요.`
+    };
+    const nextSteps=Object.fromEntries(Object.entries(steps).filter(([number])=>Number(number)<step));
+    const runsFile=path.join(stateDir,'dashboard-runs.json');
+    const saved=fs.existsSync(runsFile)?json(runsFile):{};
+    const runs=Object.fromEntries(Object.entries(saved.generation===(current.resetAt??null)?saved.steps??{}:{}).filter(([number])=>Number(number)<step));
+    const changes=[
+      [stepsFile,nextSteps],
+      [runsFile,{generation:at,steps:runs}],
+      [currentFile,next]
+    ];
+    if(step<=8)changes.push([path.join(stateDir,'scene-image-review.json'),{}]);
+    if(root)changes.push([path.join(root,'현황표상태.json'),{steps:nextSteps,currentWork:next,chatId:session}]);
+    const originals=changes.map(([file])=>fs.existsSync(file)?fs.readFileSync(file):null);
+    const written=[];
+    try {
+      for(const [index,[file,value]] of changes.entries()){
+        atomic(file,JSON.stringify(value,null,2)+'\n');
+        written.push(index);
+      }
+    } catch(error){
+      for(const index of written.reverse()){
+        const [file]=changes[index];
+        if(originals[index]===null)fs.unlinkSync(file);
+        else atomic(file,originals[index]);
+      }
+      throw error;
+    }
+    return {reset:true,step,resetAt:at};
+  }
+  return {preview,execute,closeProject,completeStage,resetProject,restartStage};
 }

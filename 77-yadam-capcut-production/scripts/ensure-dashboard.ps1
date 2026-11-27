@@ -49,7 +49,7 @@ function Get-DashboardHealth([int]$TimeoutMs = 700) {
 
 function Test-Dashboard($health) {
     return $health -and $health.service -eq 'lala-yadam-dashboard' -and $health.version -eq 2 -and
-        $health.workflowOrderVersion -eq 3 -and $health.sceneImageReviewChoice -eq $true -and $health.usageNoticeVersion -eq 1 -and $health.projectReset -eq $true -and $health.topicChoiceVersion -eq 3 -and $health.synopsisReader -eq $true -and $health.stageRunner -eq $true -and $health.resultFileLinks -eq $true -and $health.resultFileOpenVersion -eq 2 -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
+        $health.workflowOrderVersion -eq 3 -and $health.sceneImageReviewChoice -eq $true -and $health.usageNoticeVersion -eq 1 -and $health.projectReset -eq $true -and $health.topicChoiceVersion -eq 3 -and $health.synopsisReader -eq $true -and $health.stageRunner -eq $true -and $health.resultFileLinks -eq $true -and $health.resultFileOpenVersion -eq 2 -and $health.resultTxtVersion -eq 3 -and [IO.Path]::GetFullPath($health.root) -eq $DashboardRoot
 }
 
 function Confirm-RunningDashboard {
@@ -67,7 +67,7 @@ if (-not $serverRunning) {
     # Refresh only shipped program files. Saved sessions and channel settings are outside this list.
     $bundledRoot = Join-Path $skillRoot 'assets\dashboard'
     New-Item -ItemType Directory -Path (Join-Path $DashboardRoot 'dist') -Force | Out-Null
-    foreach ($file in @('server.mjs','cleanup.mjs','project-layout.mjs','scene-image-review.mjs','stage-runner.mjs','dist\app.js','dist\index.html','dist\style.css')) {
+    foreach ($file in @('server.mjs','cleanup.mjs','project-layout.mjs','scene-image-review.mjs','stage-runner.mjs','result-text.mjs','dist\app.js','dist\index.html','dist\style.css')) {
         $source = Join-Path $bundledRoot $file
         $target = Join-Path $DashboardRoot $file
         if (-not (Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash) {

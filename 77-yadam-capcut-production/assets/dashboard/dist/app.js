@@ -8,12 +8,43 @@ let dashboardRunner={available:false,busy:false,runs:{}};
 let dashboardWork={};
 let dashboardStartBusy=false;
 let dashboardSynopsisRevision=null;
+let dashboardStageResetOnly=false;
 let openStageResult=null;
 const session=new URLSearchParams(location.search).get('session');const query=session?'?session='+encodeURIComponent(session):'';const container=document.getElementById('steps');const cleanupAction=document.getElementById('cleanup-action');let statuses={};let signature='';let fetching=false;
 const resetButton=document.getElementById('project-reset');
 const resetError=document.getElementById('project-reset-error');
 const chatGuide=document.getElementById('chat-guide');
 let resetBusy=false;
+
+function canRestartStage(step){
+ if(!dashboardStageResetOnly||!session||!signature||resetBusy||dashboardStartBusy||cleanupBusy||projectCloseBusy||stageCompleteBusy!==null||reviewBusy||dashboardRunner.busy)return false;
+ if(step===1)return Boolean(activeProjectPath||dashboardWork.topicSelection?.candidates?.length||dashboardWork.topic);
+ if(!dashboardWork.topic||!dashboardWork.duration)return false;
+ if(step===2)return true;
+ return Boolean(activeProjectPath);
+}
+
+async function restartStage(step,button){
+ if(!canRestartStage(step))return;
+ resetBusy=true;
+ button.disabled=true;
+ notifyStage('');
+ try{
+  const response=await fetch('/api/steps/restart'+query,{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({step,expectedProjectPath:activeProjectPath??null,resetAt:dashboardWork.resetAt??null})
+  });
+  const result=await response.json();
+  if(!response.ok||!result.reset)throw Error(result.error||`${step}단계부터 초기화하지 못했습니다.`);
+  notifyStage(`${step}단계부터 초기화했습니다. 준비되면 시작을 누르세요.`);
+ }catch(error){
+  notifyStage(error.message);
+ }finally{
+  resetBusy=false;
+  signature='';
+  await refresh();
+ }
+}
 
 resetButton.addEventListener('click',async()=>{
  if(!session||resetBusy||cleanupBusy||projectCloseBusy||stageCompleteBusy!==null||reviewBusy||dashboardRunner.busy)return;
@@ -111,7 +142,9 @@ function paint(){
  document.getElementById('progress').textContent=`${done} / ${steps.length}`;
  document.getElementById('meter').max=steps.length;
  document.getElementById('meter').value=done;
- const current=steps.findIndex((_,i)=>!complete(i+1));
+ const restartStep=dashboardWork.restartFromStep&&dashboardWork.step;
+ const current=restartStep>=1&&restartStep<=steps.length&&!complete(restartStep)
+  ?restartStep-1:steps.findIndex((_,i)=>!complete(i+1));
  const active=current>=0?statuses[current+1]?.state:null;
  document.getElementById('next').textContent=projectClosed
   ?'프로젝트 종료 · 상단 리셋으로 새 이야기 시작'
@@ -132,7 +165,18 @@ function paint(){
   const mark=document.createElement('span');
   mark.className='mark';
   mark.textContent=review?'!':complete(n)?'✓':state==='running'?'…':index===current?'다음':'';
-  top.append(num,mark);
+  const numberGroup=document.createElement('span');
+  numberGroup.className='step-number-group';
+  const restart=document.createElement('button');
+  restart.type='button';
+  restart.className='stage-restart';
+  restart.textContent='★';
+  restart.title=dashboardStageResetOnly?'초기화':'현황표 서버를 다시 열면 초기화할 수 있습니다.';
+  restart.setAttribute('aria-label',`${n}단계부터 초기화`);
+  restart.disabled=!canRestartStage(n);
+  restart.addEventListener('click',()=>void restartStage(n,restart));
+  numberGroup.append(num,restart);
+  top.append(numberGroup,mark);
   const name=document.createElement('h2');
   name.textContent=title;
   if(n===2)name.tabIndex=-1;
@@ -213,8 +257,6 @@ const stageNotice=document.getElementById('stage-notice');
 const stageResultPanel=document.getElementById('stage-result-panel');
 const stageResultTitle=document.getElementById('stage-result-title');
 const stageResultContent=document.getElementById('stage-result-content');
-const stageFollowup=document.getElementById('stage-followup');
-const stageNote=document.getElementById('stage-note');
 let dashboardResultSteps=[];
 let topicSignature='';
 let topicDurationSignature='';
@@ -260,7 +302,7 @@ function notifyStage(text){
  stageNotice.hidden=!text;
 }
 
-async function startDashboardStage(step,note='',current=dashboardWork){
+async function startDashboardStage(step,current=dashboardWork){
  if(!canStartDashboardStep(step,current)){
   if(!dashboardRunner.available)notifyStage('이 PC의 Codex 실행기에 연결할 수 없습니다.');
   return;
@@ -270,7 +312,7 @@ async function startDashboardStage(step,note='',current=dashboardWork){
  try{
   const response=await fetch('/api/steps/run'+query,{
    method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({step,expectedProjectPath:current.projectPath??null,resetAt:current.resetAt??null,note})
+   body:JSON.stringify({step,expectedProjectPath:current.projectPath??null,resetAt:current.resetAt??null})
   });
   const run=await response.json();
   if(!response.ok)throw Error(run.error);
@@ -313,10 +355,76 @@ function showResultOpenNotice(message,detail,error=false){
 }
 
 function renderResultFiles(step,result,target){
- if(!result.files?.length)return;
- const projectPath=dashboardWork.projectPath;
+ if(!result.files?.length&&!result.txt?.length)return;
+ const projectPath=dashboardWork.projectPath??null;
+ const resetAt=dashboardWork.resetAt??null;
  const section=document.createElement('section');
  section.className='result-files';
+ const preview=document.createElement('section');
+ preview.className='result-txt-preview';
+ preview.hidden=true;
+ const documents=new Map((result.txt??[]).map(document=>[document.id,document]));
+ function txtButton(documentInfo,label){
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='quiet result-txt-button';
+  button.textContent=label;
+  button.setAttribute('aria-label',`${documentInfo.name} TXT 열고 이 채팅에 표시`);
+  button.title='TXT 원문을 열고 이 채팅에 표시를 요청합니다';
+  button.addEventListener('click',async()=>{
+   button.disabled=true;
+   const status=document.createElement('p');
+   status.setAttribute('role','status');
+   status.textContent='TXT를 열고 채팅에 표시를 요청하는 중입니다.';
+   preview.replaceChildren(status);
+   preview.hidden=false;
+   try{
+    const response=await fetch('/api/steps/result/txt'+query,{
+     method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({step,id:documentInfo.id,expectedProjectPath:projectPath,resetAt})
+    });
+    const documentResult=await response.json();
+    if(!response.ok)throw Error(documentResult.error);
+    const title=document.createElement('strong');
+    title.textContent=documentInfo.name;
+    const body=document.createElement('pre');
+    const sceneRows=/^(\|[ \t]*I\d{2,}(?:-[A-Z])?[ \t]*\|[^\r\n]*)(\r?\n)(?=\|[ \t]*I\d{2,}(?:-[A-Z])?[ \t]*\|)/gm;
+    const previewText=step===11?documentResult.text.replace(sceneRows,'$1$2$2'):documentResult.text;
+    body.textContent=previewText;
+    body.tabIndex=0;
+    body.setAttribute('aria-label',documentInfo.name+' 원문');
+    function copyButton(label,text){
+     const copy=document.createElement('button');
+     copy.type='button';
+     copy.className='quiet';
+     copy.textContent=label;
+     copy.addEventListener('click',async()=>{
+      try{await navigator.clipboard.writeText(text);status.textContent=`${label} 완료. 채팅 입력창에서 Ctrl+V로 붙여 넣을 수 있습니다.`;}
+      catch{status.textContent='자동 복사가 되지 않아 복사할 내용을 열었습니다.';
+       const field=document.createElement('textarea');
+       field.value=text;
+       field.readOnly=true;
+       field.setAttribute('aria-label',label);
+       preview.querySelector('textarea')?.remove();
+       body.before(field);
+       field.select();
+      }
+     });
+     return copy;
+    }
+    status.textContent=documentResult.queued
+     ?documentResult.resumed?'이 채팅에 원문 표시를 요청했습니다.':'채팅에 요청을 예약했습니다. 채팅이 다시 연결되면 처리됩니다.'
+     :documentResult.notice;
+    const actions=document.createElement('div');
+    actions.className='result-txt-actions';
+    if(!documentResult.queued)actions.append(copyButton('채팅 요청 복사',documentResult.prompt));
+    actions.append(copyButton('본문 복사',previewText));
+    preview.replaceChildren(title,status,actions,body);
+   }catch(error){status.textContent=error.message||'TXT를 열지 못했습니다.';}
+   finally{button.disabled=false;}
+  });
+  return button;
+ }
  function openButton(label,file=null){
   const button=document.createElement('button');
   button.type='button';
@@ -344,17 +452,22 @@ function renderResultFiles(step,result,target){
   folder.className='quiet';
   section.append(folder);
  }
+ const summary=documents.get('summary');
+ if(summary)section.append(txtButton(summary,'TXT'));
  const list=document.createElement('ol');
- for(const file of result.files){
+ for(const file of result.files??[]){
   const item=document.createElement('li');
   const button=openButton(file.label,file.path);
   button.className='result-file-link';
   button.title='파일 탐색기에서 '+file.label+' 선택';
   item.append(button);
   if(file.detail)item.append(' · '+file.detail);
+  const txt=documents.get(file.path);
+  if(txt)item.append(txtButton(txt,'TXT'));
   list.append(item);
  }
- section.append(list);
+ if(list.children.length)section.append(list);
+ section.append(preview);
  target.append(section);
 }
 
@@ -379,8 +492,6 @@ async function toggleStageResult(step,id){
   stageResultContent.replaceChildren();
   renderResultFiles(step,result,stageResultContent);
   if(result.text)renderSynopsis(result.text.replace(/\[([^\]\r\n]+)\]\(<?[A-Za-z]:[\\/][^>\r\n)]*>?\)/g,'$1'),stageResultContent);
-  stageNote.value='';
-  stageFollowup.hidden=dashboardRunner.runs[step]?.phase!=='awaiting_input';
   paint();
   focusStageResultButton(step);
  }catch(error){notifyStage(error.message||'작업 결과를 불러오지 못했습니다.');}
@@ -389,11 +500,6 @@ async function toggleStageResult(step,id){
 function focusStageResultButton(step){
  container.querySelector(`.step[data-step="${step}"] .stage-result-toggle`)?.focus({preventScroll:true});
 }
-
-stageFollowup.addEventListener('submit',event=>{
- event.preventDefault();
- if(openStageResult)void startDashboardStage(openStageResult.step,stageNote.value);
-});
 
 function synopsisLine(element,line){
  for(const [index,part] of line.split(/\*\*(.+?)\*\*/g).entries()){
@@ -475,7 +581,7 @@ async function requestTopicChoice(route,input){
    const card=container.querySelector('.step[data-step="2"]');
    card?.querySelector('h2')?.focus({preventScroll:true});
    card?.scrollIntoView({block:'start'});
-   if(dashboardRunner.available)void startDashboardStage(2,'',result.current);
+   if(dashboardRunner.available)void startDashboardStage(2,result.current);
   }
   return true;
  }catch(error){
@@ -506,7 +612,7 @@ topicNext.addEventListener('click',async()=>{
  }
 });
 
-async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardResultSteps=snapshot.resultSteps??[];dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardSynopsisRevision=snapshot.synopsisRevision??null;showTopicChoice(current);updateTopicButton();
+async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardResultSteps=snapshot.resultSteps??[];dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardSynopsisRevision=snapshot.synopsisRevision??null;dashboardStageResetOnly=snapshot.stageResetOnly===true;showTopicChoice(current);updateTopicButton();
 chatGuide.textContent=dashboardRunner.available?'현황표에서 진행할 단계의 시작 버튼을 누르세요.':current.topic?'채팅에 “다음 단계”를 입력해 이어가세요.':'채팅에 “1”을 입력하면 주제와 길이를 고를 수 있어요.';
 updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'현황표에서 주제와 영상 길이를 골라주세요.';paint()}resetButton.disabled=!session||resetBusy||dashboardRunner.busy;document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
 paint();setTimeout(refresh,0);setInterval(refresh,2500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});

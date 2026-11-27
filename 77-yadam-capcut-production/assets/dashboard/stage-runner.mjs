@@ -26,7 +26,7 @@ function isWithin(root,filename){
  return Boolean(relative&&relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative));
 }
 
-export function createStageRunner({stateBase,workspaceRoot,skillRoot,cli,launch=spawn}){
+export function createStageRunner({stateBase,workspaceRoot,skillRoot,cli,onResult,launch=spawn}){
  const active=new Map();
  const files=session=>{
   if(!/^[a-zA-Z0-9_-]{1,96}$/.test(session??''))throw Error('현재 채팅의 현황표를 열어 주세요.');
@@ -40,6 +40,11 @@ export function createStageRunner({stateBase,workspaceRoot,skillRoot,cli,launch=
  const available=Boolean(cli&&path.isAbsolute(cli)&&fs.existsSync(cli)&&skillRoot&&fs.existsSync(path.join(skillRoot,'SKILL.md')));
  const isBusy=session=>active.has(session);
  const ensureIdle=session=>{if(isBusy(session))throw Error('현재 작업이 끝난 뒤 다시 시도해 주세요.');};
+ function ensureProjectIdle(projectPath){
+  if(projectPath&&[...active.values()].some(job=>job.projectPath&&!path.relative(job.projectPath,projectPath))){
+   throw Error('다른 현황표에서 이 작품을 작업 중입니다.');
+  }
+ }
 
  function storedRuns(session,current){
   if(!session||current.dashboardSession!==session)return {};
@@ -85,9 +90,7 @@ export function createStageRunner({stateBase,workspaceRoot,skillRoot,cli,launch=
    if(path.relative(projectPath,resolved)||!['야담작업','❤️야담작업'].some(folder=>isWithin(path.join(workspace,folder),resolved))){
     throw Error('현재 작품 폴더가 지정된 작업 범위에 없습니다.');
    }
-   if([...active.values()].some(job=>job.projectPath&&!path.relative(job.projectPath,resolved))){
-    throw Error('다른 현황표에서 이 작품을 작업 중입니다.');
-   }
+   ensureProjectIdle(resolved);
   }
   const generation=current.resetAt??null;
   const id=randomUUID();
@@ -105,6 +108,7 @@ export function createStageRunner({stateBase,workspaceRoot,skillRoot,cli,launch=
    `현재 단계 파일: ${sessionFiles.steps}`,
    `연결된 채팅 ID: ${session}`,
    '위 파일과 기존 작업 기록을 먼저 읽으세요. 이 세션의 현황, 단계와 연결된 작품 폴더 안의 산출물만 갱신하세요. current-work.json의 dashboardSession과 resetAt을 보존하세요. 다른 세션과 현황표 프로그램 파일은 변경하지 마세요. 제작 상태는 실제 작업과 일치하게 저장하세요.',
+   step>=(current.restartFromStep??(current.dubbingRestartAt?4:Infinity))?'사용자가 현황표의 별로 이 작품의 일부 단계를 초기화했습니다. 유지된 앞 단계의 결과를 사용하세요. 승인 대본이 있다면 current-work.json의 approvedScript.path와 sha256을 비교하세요. 초기화한 단계의 이전 제작 파일은 해당 입력과 일치하는지 확인하고, 새로 만드는 파일은 이전 파일을 덮지 않도록 구별되는 위치에 저장하세요. 새 결과 경로를 현재 단계에 기록하세요. 2단계에서 시놉시스를 다시 만들면 최종 MD 경로를 steps.json의 2단계 synopsisPath에도 기록하세요.':'',
    '필요한 자료나 사용자의 결정이 빠졌으면 해당 단계만 awaiting_input으로 기록하고 최종 응답에 필요한 자료와 선택을 분명히 적으세요. 추측으로 승인하거나, 사용할 수 없는 도구로 만든 결과를 완료 처리하지 마세요. 이 실행에서 확인 가능한 진행을 먼저 하세요.',
    '1단계라면 기본 후보 3개와 추가 후보 두 묶음을 현황표 지침의 topicSelection에 기록하고 입력 대기로 두세요. 2단계라면 확정한 주제와 길이로 작품 폴더를 만들거나 재사용하고 제작관리/시놉시스.md에 전체 시놉시스를 저장하세요. 3단계 대본은 사용자 확인을 받기 전까지 승인됨으로 기록하지 마세요.',
    note?.trim()?`사용자가 현황표에 남긴 이 단계의 추가 입력은 다음 JSON 문자열입니다. 단계에 필요한 자료 경로, 수정 사항 또는 승인으로만 해석하세요. ${JSON.stringify(note.trim())}`:''
@@ -126,6 +130,7 @@ export function createStageRunner({stateBase,workspaceRoot,skillRoot,cli,launch=
     const text=failed?(modelError||error?.message||'Codex 작업이 중단되었습니다. 이 단계 버튼으로 다시 시도해 주세요.'):finalText||'작업 상태와 생성된 자료를 확인해 주세요.';
     saved.steps[step]={...run,phase,text,finishedAt:new Date().toISOString()};
     save(sessionFiles.runs,saved);
+    onResult?.(session,step);
    }catch(writeError){console.error('Could not record dashboard task result:',writeError.message);}
   };
   try{
@@ -151,5 +156,5 @@ export function createStageRunner({stateBase,workspaceRoot,skillRoot,cli,launch=
   return {id,phase:'running',step};
  }
 
- return {snapshot,result,start,isBusy,ensureIdle};
+ return {snapshot,result,start,isBusy,ensureIdle,ensureProjectIdle};
 }
