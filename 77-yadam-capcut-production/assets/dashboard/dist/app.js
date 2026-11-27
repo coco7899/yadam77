@@ -161,14 +161,15 @@ function paint(){
    runButton.addEventListener('click',()=>void startDashboardStage(n));
    card.append(runButton);
   }
-  if(run?.resultAvailable&&!(n===2&&dashboardHasSynopsis)){
+  const resultKey=stageResultKey(n);
+  if(resultKey&&!(n===2&&dashboardHasSynopsis)){
    const resultButton=document.createElement('button');
    resultButton.type='button';
    resultButton.className='quiet stage-result-toggle';
-   resultButton.textContent=openStageResult?.id===run.id?'접기':'결과 보기';
-   resultButton.setAttribute('aria-expanded',String(openStageResult?.id===run.id));
+   resultButton.textContent=openStageResult?.id===resultKey?'접기':'결과 보기';
+   resultButton.setAttribute('aria-expanded',String(openStageResult?.id===resultKey));
    resultButton.setAttribute('aria-controls','stage-result-panel');
-   resultButton.addEventListener('click',()=>void toggleStageResult(n,run));
+   resultButton.addEventListener('click',()=>void toggleStageResult(n,resultKey));
    card.append(resultButton);
   }
   if(n>=10&&n<=12){
@@ -188,7 +189,7 @@ function paint(){
  if(openStageResult){
   const {step,id}=openStageResult;
   const card=container.querySelector(`.step[data-step="${step}"]`);
-  if(card&&dashboardRunner.runs[step]?.id===id&&!(step===2&&dashboardHasSynopsis)){
+  if(card&&stageResultKey(step)===id&&!(step===2&&dashboardHasSynopsis)){
    card.after(stageResultPanel);
    stageResultPanel.hidden=false;
   }else{
@@ -221,6 +222,7 @@ const stageResultTitle=document.getElementById('stage-result-title');
 const stageResultContent=document.getElementById('stage-result-content');
 const stageFollowup=document.getElementById('stage-followup');
 const stageNote=document.getElementById('stage-note');
+let dashboardResultSteps=[];
 let topicSignature='';
 let topicDurationSignature='';
 let topicBatchNumber=0;
@@ -292,8 +294,78 @@ async function startDashboardStage(step,note='',current=dashboardWork){
  }
 }
 
-async function toggleStageResult(step,run){
- if(openStageResult?.id===run.id){
+function stageResultKey(step){
+ const run=dashboardRunner.runs[step];
+ if(run?.resultAvailable)return run.id;
+ return dashboardResultSteps.includes(step)?JSON.stringify([dashboardWork.projectPath,step]):null;
+}
+
+const resultOpenNotice=document.createElement('div');
+resultOpenNotice.className='result-open-notice';
+resultOpenNotice.setAttribute('role','status');
+resultOpenNotice.setAttribute('aria-atomic','true');
+document.body.append(resultOpenNotice);
+let resultOpenNoticeTimer;
+
+function showResultOpenNotice(message,detail,error=false){
+ const title=document.createElement('strong');
+ title.textContent=message;
+ const description=document.createElement('span');
+ description.textContent=detail;
+ resultOpenNotice.classList.toggle('is-error',error);
+ resultOpenNotice.replaceChildren(title,description);
+ clearTimeout(resultOpenNoticeTimer);
+ resultOpenNoticeTimer=setTimeout(()=>resultOpenNotice.replaceChildren(),6500);
+}
+
+function renderResultFiles(step,result,target){
+ if(!result.files?.length)return;
+ const projectPath=dashboardWork.projectPath;
+ const section=document.createElement('section');
+ section.className='result-files';
+ function openButton(label,file=null){
+  const button=document.createElement('button');
+  button.type='button';
+  button.textContent=label;
+  button.addEventListener('click',async()=>{
+   button.disabled=true;
+   const locationName=file?label:(result.folder==='.'?dashboardWork.topic:result.folder.split('/').at(-1));
+   showResultOpenNotice('파일 탐색기를 여는 중이에요',locationName);
+   try{
+    const response=await fetch('/api/steps/result/open'+query,{
+     method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({step,file,expectedProjectPath:projectPath})
+    });
+    if(!response.ok)throw Error((await response.json()).error);
+    showResultOpenNotice(file?'파일 위치를 열었어요':'저장 폴더를 열었어요',locationName);
+   }catch(error){
+    showResultOpenNotice('파일 탐색기를 열지 못했어요',error.message||locationName,true);
+   }
+   finally{button.disabled=false;}
+  });
+  return button;
+ }
+ if(result.folder){
+  const folder=openButton('저장 폴더 열기');
+  folder.className='quiet';
+  section.append(folder);
+ }
+ const list=document.createElement('ol');
+ for(const file of result.files){
+  const item=document.createElement('li');
+  const button=openButton(file.label,file.path);
+  button.className='result-file-link';
+  button.title='파일 탐색기에서 '+file.label+' 선택';
+  item.append(button);
+  if(file.detail)item.append(' · '+file.detail);
+  list.append(item);
+ }
+ section.append(list);
+ target.append(section);
+}
+
+async function toggleStageResult(step,id){
+ if(openStageResult?.id===id){
   openStageResult=null;
   stageResultPanel.hidden=true;
   paint();
@@ -304,13 +376,14 @@ async function toggleStageResult(step,run){
   const response=await fetch('/api/steps/result'+query+'&step='+step,{cache:'no-store'});
   const result=await response.json();
   if(!response.ok)throw Error(result.error);
-  if(dashboardRunner.runs[step]?.id!==run.id)return;
-  openStageResult={step,id:run.id};
+  if(stageResultKey(step)!==id)return;
+  openStageResult={step,id};
   stageResultTitle.textContent=`${step}단계 작업 결과`;
   stageResultContent.replaceChildren();
-  renderSynopsis(result.text,stageResultContent);
+  renderResultFiles(step,result,stageResultContent);
+  if(result.text)renderSynopsis(result.text.replace(/\[([^\]\r\n]+)\]\(<?[A-Za-z]:[\\/][^>\r\n)]*>?\)/g,'$1'),stageResultContent);
   stageNote.value='';
-  stageFollowup.hidden=run.phase!=='awaiting_input';
+  stageFollowup.hidden=dashboardRunner.runs[step]?.phase!=='awaiting_input';
   paint();
   focusStageResultButton(step);
  }catch(error){notifyStage(error.message||'작업 결과를 불러오지 못했습니다.');}
@@ -385,6 +458,7 @@ synopsisToggle.addEventListener('click',async()=>{
   if(source!==synopsisSource)return;
   if(!response.ok)throw Error(result.error);
   if(result.revision!==JSON.parse(source)[1])throw Error('시놉시스가 갱신됐습니다. 잠시 후 다시 열어 주세요.');
+  renderResultFiles(2,result,synopsisResult);
   renderSynopsis(result.text);
   setSynopsisExpanded(true);
  }catch(error){
@@ -484,7 +558,7 @@ topicNext.addEventListener('click',async()=>{
  }
 });
 
-async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardHasSynopsis=Boolean(snapshot.synopsisRevision);showTopicChoice(current);updateTopicButton();showSynopsis(current,snapshot.synopsisRevision);
+async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardResultSteps=snapshot.resultSteps??[];dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardHasSynopsis=Boolean(snapshot.synopsisRevision);showTopicChoice(current);updateTopicButton();showSynopsis(current,snapshot.synopsisRevision);
 chatGuide.textContent=dashboardRunner.available?'현황표에서 진행할 단계의 시작 버튼을 누르세요.':current.topic?'채팅에 “다음 단계”를 입력해 이어가세요.':'채팅에 “1”을 입력하면 주제와 길이를 고를 수 있어요.';
 updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'현황표에서 주제와 영상 길이를 골라주세요.';paint()}resetButton.disabled=!session||resetBusy||dashboardRunner.busy;document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
 paint();setTimeout(refresh,0);setInterval(refresh,2500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
