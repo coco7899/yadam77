@@ -7,7 +7,7 @@ let stageCompleteBusy=null;
 let dashboardRunner={available:false,busy:false,runs:{}};
 let dashboardWork={};
 let dashboardStartBusy=false;
-let dashboardHasSynopsis=false;
+let dashboardSynopsisRevision=null;
 let openStageResult=null;
 const session=new URLSearchParams(location.search).get('session');const query=session?'?session='+encodeURIComponent(session):'';const container=document.getElementById('steps');const cleanupAction=document.getElementById('cleanup-action');let statuses={};let signature='';let fetching=false;
 const resetButton=document.getElementById('project-reset');
@@ -135,6 +135,7 @@ function paint(){
   top.append(num,mark);
   const name=document.createElement('h2');
   name.textContent=title;
+  if(n===2)name.tabIndex=-1;
   name.style.whiteSpace='pre-line';
   const text=document.createElement('p');
   text.className='state';
@@ -162,7 +163,7 @@ function paint(){
    card.append(runButton);
   }
   const resultKey=stageResultKey(n);
-  if(resultKey&&!(n===2&&dashboardHasSynopsis)){
+  if(resultKey){
    const resultButton=document.createElement('button');
    resultButton.type='button';
    resultButton.className='quiet stage-result-toggle';
@@ -189,7 +190,7 @@ function paint(){
  if(openStageResult){
   const {step,id}=openStageResult;
   const card=container.querySelector(`.step[data-step="${step}"]`);
-  if(card&&stageResultKey(step)===id&&!(step===2&&dashboardHasSynopsis)){
+  if(card&&stageResultKey(step)===id){
    card.after(stageResultPanel);
    stageResultPanel.hidden=false;
   }else{
@@ -207,14 +208,6 @@ const topicSubmit=topicForm.querySelector('button[type=submit]');
 const topicNext=document.getElementById('topic-next');
 const topicOtherHelp=document.getElementById('topic-other-help');
 const topicListStatus=document.getElementById('topic-list-status');
-const synopsisStage=document.getElementById('synopsis-stage');
-const synopsisTitle=document.getElementById('synopsis-title');
-const synopsisTopic=document.getElementById('synopsis-topic');
-const synopsisStatus=document.getElementById('synopsis-status');
-const synopsisToggle=document.getElementById('synopsis-toggle');
-const synopsisResult=document.getElementById('synopsis-result');
-const synopsisError=document.getElementById('synopsis-error');
-let synopsisSource=null;
 const topicError=document.getElementById('topic-choice-error');
 const stageNotice=document.getElementById('stage-notice');
 const stageResultPanel=document.getElementById('stage-result-panel');
@@ -295,6 +288,7 @@ async function startDashboardStage(step,note='',current=dashboardWork){
 }
 
 function stageResultKey(step){
+ if(step===2&&dashboardSynopsisRevision)return JSON.stringify([dashboardWork.projectPath,step,dashboardSynopsisRevision]);
  const run=dashboardRunner.runs[step];
  if(run?.resultAvailable)return run.id;
  return dashboardResultSteps.includes(step)?JSON.stringify([dashboardWork.projectPath,step]):null;
@@ -373,10 +367,13 @@ async function toggleStageResult(step,id){
   return;
  }
  try{
-  const response=await fetch('/api/steps/result'+query+'&step='+step,{cache:'no-store'});
+  const revision=step===2?dashboardSynopsisRevision:null;
+  const endpoint=revision?'/api/synopsis'+query:'/api/steps/result'+query+'&step='+step;
+  const response=await fetch(endpoint,{cache:'no-store'});
   const result=await response.json();
   if(!response.ok)throw Error(result.error);
   if(stageResultKey(step)!==id)return;
+  if(revision&&result.revision!==revision)throw Error('시놉시스가 갱신됐습니다. 잠시 후 다시 열어 주세요.');
   openStageResult={step,id};
   stageResultTitle.textContent=`${step}단계 작업 결과`;
   stageResultContent.replaceChildren();
@@ -398,31 +395,6 @@ stageFollowup.addEventListener('submit',event=>{
  if(openStageResult)void startDashboardStage(openStageResult.step,stageNote.value);
 });
 
-function setSynopsisExpanded(expanded){
- synopsisResult.hidden=!expanded;
- synopsisToggle.setAttribute('aria-expanded',String(expanded));
- synopsisToggle.textContent=expanded?'접기':'결과 보기';
-}
-
-function showSynopsis(current,revision=null){
- const available=Boolean(session&&current.topic&&current.projectPath&&revision);
- const nextSource=available?JSON.stringify([current.projectPath,revision]):null;
- if(synopsisSource!==nextSource){
-  synopsisSource=nextSource;
-  synopsisResult.replaceChildren();
-  setSynopsisExpanded(false);
-  synopsisToggle.disabled=false;
-  synopsisError.hidden=true;
- }
- synopsisStage.hidden=!(available||(session&&current.step===2&&current.topic));
- synopsisToggle.hidden=!available;
- synopsisStatus.hidden=available;
- if(!synopsisStage.hidden){
-  synopsisTopic.textContent=[current.topic,current.duration].filter(Boolean).join(' · ');
-  synopsisStatus.textContent=current.synopsisSummary||'선택이 저장됐습니다. 시놉시스 준비 단계입니다.';
- }
-}
-
 function synopsisLine(element,line){
  for(const [index,part] of line.split(/\*\*(.+?)\*\*/g).entries()){
   if(index%2===0)element.append(part);
@@ -435,7 +407,7 @@ function synopsisLine(element,line){
  return element;
 }
 
-function renderSynopsis(text,target=synopsisResult){
+function renderSynopsis(text,target){
  for(const line of text.split(/\r?\n/)){
   if(!line.trim())continue;
   const heading=line.match(/^(#{1,6})\s+(.+)$/);
@@ -443,33 +415,6 @@ function renderSynopsis(text,target=synopsisResult){
   target.append(synopsisLine(document.createElement(tag),heading?.[2]??line));
  }
 }
-
-synopsisToggle.addEventListener('click',async()=>{
- if(!synopsisResult.hidden){setSynopsisExpanded(false);return;}
- if(synopsisResult.hasChildNodes()){setSynopsisExpanded(true);return;}
- const source=synopsisSource;
- if(!source)return;
- synopsisToggle.disabled=true;
- synopsisToggle.textContent='불러오는 중…';
- synopsisError.hidden=true;
- try{
-  const response=await fetch('/api/synopsis'+query,{cache:'no-store'});
-  const result=await response.json();
-  if(source!==synopsisSource)return;
-  if(!response.ok)throw Error(result.error);
-  if(result.revision!==JSON.parse(source)[1])throw Error('시놉시스가 갱신됐습니다. 잠시 후 다시 열어 주세요.');
-  renderResultFiles(2,result,synopsisResult);
-  renderSynopsis(result.text);
-  setSynopsisExpanded(true);
- }catch(error){
-  if(source!==synopsisSource)return;
-  setSynopsisExpanded(false);
-  synopsisError.textContent=error.message||'시놉시스를 불러오지 못했습니다.';
-  synopsisError.hidden=false;
- }finally{
-  if(source===synopsisSource)synopsisToggle.disabled=false;
- }
-});
 
 function showTopicChoice(current){
  const selection=current.topicSelection;
@@ -524,9 +469,12 @@ async function requestTopicChoice(route,input){
   if(!response.ok)throw Error(result.error);
   showTopicChoice(result.current);
   if(result.current.step===2){
-   showSynopsis(result.current);
-   synopsisTitle.focus({preventScroll:true});
-   synopsisStage.scrollIntoView({block:'start'});
+   dashboardWork=result.current;
+   statuses[1]={...statuses[1],state:'completed'};
+   paint();
+   const card=container.querySelector('.step[data-step="2"]');
+   card?.querySelector('h2')?.focus({preventScroll:true});
+   card?.scrollIntoView({block:'start'});
    if(dashboardRunner.available)void startDashboardStage(2,'',result.current);
   }
   return true;
@@ -558,7 +506,7 @@ topicNext.addEventListener('click',async()=>{
  }
 });
 
-async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardResultSteps=snapshot.resultSteps??[];dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardHasSynopsis=Boolean(snapshot.synopsisRevision);showTopicChoice(current);updateTopicButton();showSynopsis(current,snapshot.synopsisRevision);
+async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardResultSteps=snapshot.resultSteps??[];dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardSynopsisRevision=snapshot.synopsisRevision??null;showTopicChoice(current);updateTopicButton();
 chatGuide.textContent=dashboardRunner.available?'현황표에서 진행할 단계의 시작 버튼을 누르세요.':current.topic?'채팅에 “다음 단계”를 입력해 이어가세요.':'채팅에 “1”을 입력하면 주제와 길이를 고를 수 있어요.';
 updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'현황표에서 주제와 영상 길이를 골라주세요.';paint()}resetButton.disabled=!session||resetBusy||dashboardRunner.busy;document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
 paint();setTimeout(refresh,0);setInterval(refresh,2500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});

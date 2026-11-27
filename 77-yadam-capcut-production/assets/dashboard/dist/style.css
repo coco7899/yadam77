@@ -40,12 +40,6 @@ button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:12px 17px;
 #project-reset-error{margin:-15px 0 16px;color:#ae3423;font-size:12px}
 @media(max-width:650px){.project-reset{padding:7px 9px;font-size:11px}.identity{min-width:0}.logo{flex-shrink:0}}
 
-#synopsis-toggle{margin-top:14px}
-#synopsis-error{color:#932f1c}
-#synopsis-result{margin-top:16px;padding:14px;border:2px solid #368348;border-radius:12px;overflow-wrap:anywhere}
-#synopsis-result h3,#synopsis-result h4,#synopsis-result h5,#synopsis-result h6{margin:14px 0 6px;line-height:1.5}
-#synopsis-result>:first-child{margin-top:0}
-#synopsis-result p{white-space:pre-wrap}
 
 .stage-run,.stage-result-toggle{align-self:flex-start}
 .stage-run{display:inline-grid;place-items:center;inline-size:28px;block-size:28px;padding:0;border-radius:7px}
