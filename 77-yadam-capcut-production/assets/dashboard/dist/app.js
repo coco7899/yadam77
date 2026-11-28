@@ -348,7 +348,7 @@ function stageResultKey(step){
 }
 
 const resultOpenNotice=document.createElement('div');
-const resultExplorerBridge=null;
+const resultExplorerBridge=(['127.0.0.1','localhost'].includes(location.hostname)&&location.port==='8790')?'http://127.0.0.1:8792':null;
 resultOpenNotice.className='result-open-notice';
 resultOpenNotice.setAttribute('role','status');
 resultOpenNotice.setAttribute('aria-atomic','true');
@@ -367,11 +367,11 @@ function showResultOpenNotice(message,detail,error=false){
 }
 
 async function requestResultOpen(payload){
- const endpoints=resultExplorerBridge?[resultExplorerBridge,null]:[null];
+ const endpoints=resultExplorerBridge?[resultExplorerBridge,'']:[''];
  for(const [index,bridge] of endpoints.entries()){
   try{
-   const response=await fetch((bridge?.url??'')+'/api/steps/result/open'+query,{
-    method:'POST',headers:{'Content-Type':'application/json',...(bridge?{'X-Yadam-Explorer':bridge.token}:{})},
+   const response=await fetch(bridge+'/api/steps/result/open'+query,{
+    method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(11000),
     body:JSON.stringify(payload)
    });
    const result=await response.json();
@@ -522,8 +522,8 @@ function renderStageResult(step,result,target){
    button.disabled=true;
    showResultOpenNotice('파일 탐색기를 여는 중이에요',label);
    try{
-    await requestResultOpen({step,file,expectedProjectPath:projectPath});
-    showResultOpenNotice(file?'파일 위치를 열었어요':'저장 폴더를 열었어요',label);
+    await requestResultOpen({step,file,expectedProjectPath:projectPath,resetAt});
+    showResultOpenNotice(file?'탐색기에서 파일을 선택했어요':'저장 폴더를 열었어요',label);
    }catch(error){
     showResultOpenNotice('파일 탐색기를 열지 못했어요',error.message||label,true);
    }

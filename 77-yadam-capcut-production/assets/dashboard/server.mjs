@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {execFile} from 'node:child_process';
+import {openResultInExplorer} from './result-explorer.mjs';
 import {createCleanup} from './cleanup.mjs';
 import {createSceneImageReview} from './scene-image-review.mjs';
 import {createStageRunner} from './stage-runner.mjs';
@@ -155,46 +155,6 @@ function publicResult(data,step){
   if(body)bodyCharacters=body.replace(/\r\n/g,'\n').split(/^#{1,6}[^\n]*\n/gm).map(part=>part.trim()).filter(Boolean).join('\n\n').length;
  }
  return {text,files,folder,bodyCharacters,revision:data.revision,txt:data.documents.map(({id,name})=>({id,name}))};
-}
-function openResultInExplorer(current,result,selection){
- const selected=selection==null?result.folder:result.files.find(file=>file.path===selection)?.path;
- if(!selected)throw Error('현재 결과에서 열 수 있는 파일이나 폴더를 선택해 주세요.');
- if(process.platform!=='win32')throw Error('저장 위치 열기는 Windows에서 사용할 수 있습니다.');
- const target=path.resolve(current.projectPath,selected);
- const shell=path.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe');
- const command=String.raw`
-$ErrorActionPreference='Stop'
-$ProgressPreference='SilentlyContinue'
-$folder=$env:YADAM_RESULT_FOLDER
-$file=$env:YADAM_RESULT_FILE
-$explorer=New-Object -ComObject Shell.Application
-$explorer.Explore($folder)
-for($attempt=0;$attempt -lt 25;$attempt++){
- foreach($window in $explorer.Windows()){
-  try{
-   $view=$window.Document
-   if([string]$view.Folder.Self.Path -ine $folder){continue}
-   if($file){
-    $item=$view.Folder.ParseName($file)
-    if(!$item){continue}
-    $view.SelectItem($item,29)
-    if(!(@($view.SelectedItems() | ForEach-Object { [IO.Path]::GetFileName($_.Path) }) -icontains $file)){continue}
-   }
-   exit 0
-  }catch{}
- }
- Start-Sleep -Milliseconds 160
-}
-exit 1`;
- const env={...process.env,YADAM_RESULT_FOLDER:selection==null?target:path.dirname(target),
-  YADAM_RESULT_FILE:selection==null?'':path.basename(target)};
- return new Promise((resolve,reject)=>{
-  execFile(shell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(command,'utf16le').toString('base64')],
-   {env,windowsHide:true,timeout:8000},error=>{
-    if(error)reject(Error('Windows에서 파일 탐색기 창을 열지 못했습니다.'));
-    else resolve();
-   });
- });
 }
 function findSynopsis(session,current,entry){
  if(!session||!path.isAbsolute(current.projectPath??'')||(current.dashboardSession&&current.dashboardSession!==session))return null;
