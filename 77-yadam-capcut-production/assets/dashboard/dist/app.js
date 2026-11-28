@@ -1,6 +1,6 @@
-const legacySteps=['주제 선택','시놉시스','대본 작성·두 번 검수','더빙용 원고 확정','스타일·캐릭터·참조 에셋','이미지프롬프트생성\n(SRT,MP3파일제공)','파일 검증·스토리 매칭','이미지 연결표','본편 렌더링·검수','인트로 제작','썸네일·업로드 준비','CapCut으로 보내기'];
-const currentSteps=['주제 선택','시놉시스','대본 작성·두 번 검수','더빙용 원고 확정','스타일·캐릭터·참조 에셋','이미지프롬프트생성\n(SRT,MP3파일제공)','파일 검증·스토리 매칭','이미지 연결표','본편 렌더링·검수','CapCut으로 보내기','인트로 제작','썸네일·업로드 준비'];
-const expandedSteps=[...currentSteps.slice(0,11),'고정화자 영상제작',currentSteps[11]];
+const legacySteps=['주제 선택','시놉시스','대본 작성·두 번 검수','더빙용 원고 확정','스타일·캐릭터·참조 에셋','이미지프롬프트생성','파일 검증·스토리 매칭\n(SRT, MP3 파일 제공)','이미지 연결표','본편 렌더링·검수','인트로 제작','썸네일·업로드 준비','CapCut으로 보내기'];
+const currentSteps=['주제 선택','시놉시스','대본 작성·두 번 검수','더빙용 원고 확정','스타일·캐릭터·참조 에셋','이미지프롬프트생성','파일 검증·스토리 매칭\n(SRT, MP3 파일 제공)','이미지 연결표','본편 렌더링·검수','CapCut으로 보내기','인트로 제작','썸네일·업로드 준비'];
+const expandedSteps=[...currentSteps.slice(0,11),'페르소나 고정화자 나레이션\n(별도 영상제작권유)',currentSteps[11]];
 let steps=expandedSteps;
 let projectClosed=false,activeProjectPath=null,projectCloseBusy=false;
 let stageCompleteBusy=null;
@@ -155,16 +155,17 @@ function paint(){
   const state=entry.state;
   const review=required.has(n);
   const run=dashboardRunner.runs[n];
+  const inProgress=run?.phase==='running'||(state==='running'&&!run);
   const card=document.createElement('article');
   card.dataset.step=n;
-  card.className='step'+(review?' review-required':complete(n)?' done':state==='running'?' running':index===current&&!projectClosed?' next':'');
+  card.className='step'+(review?' review-required':complete(n)?' done':inProgress?' running':index===current&&!projectClosed?' next':'');
   const top=document.createElement('div');
   top.className='top';
   const num=document.createElement('span');
   num.textContent=String(n).padStart(2,'0');
   const mark=document.createElement('span');
   mark.className='mark';
-  mark.textContent=review?'!':complete(n)?'✓':state==='running'?'…':index===current?'다음':'';
+  mark.textContent=review?'!':complete(n)?'✓':inProgress?'…':index===current?'다음':'';
   const numberGroup=document.createElement('span');
   numberGroup.className='step-number-group';
   const restart=document.createElement('button');
@@ -183,21 +184,28 @@ function paint(){
   name.style.whiteSpace='pre-line';
   const text=document.createElement('p');
   text.className='state';
-  text.textContent=run?.phase==='running'?'Codex 작업 중':run?.phase==='failed'||run?.phase==='interrupted'?'다시 실행할 수 있습니다':
+  text.textContent=inProgress?(run?.stalled?'응답 지연 · 상태 확인 필요':'진행 중'):run?.phase==='failed'||run?.phase==='interrupted'?'작업 중단 · 다시 실행 가능':
    review
    ?(state==='completed'||entry.previousCompletions?.length?'이전 완료 기록 있음 · 재검수 필요':'재검수 필요')
    :complete(n)?'완료':state==='running'?'작업 중':state==='awaiting_input'?'입력 대기':state==='failed'?'확인이 필요합니다':index===current?'다음 작업':'대기';
+  if(inProgress){
+   const dots=document.createElement('span');
+   dots.className=run?.stalled?'stage-running-dots is-stalled':'stage-running-dots';
+   dots.setAttribute('aria-hidden','true');
+   dots.append(...Array.from({length:3},()=>document.createElement('i')));
+   text.append(dots);
+  }
+  if(n===7&&state==='awaiting_input')text.textContent=entry.nextInput||'MP3와 SRT를 채팅에 첨부하면 7단계를 진행합니다.';
   if(review&&imageReview.scenes?.length)text.title='새 장면 이미지: '+imageReview.scenes.join(', ');
   card.append(top,name,text);
-  if(!complete(n)){
+  if(!complete(n)&&!inProgress){
    const runButton=document.createElement('button');
    runButton.type='button';
    runButton.className='stage-run';
-   const running=run?.phase==='running';
-   const action=running?'진행 중':run?.phase==='awaiting_input'?'이어서 실행':'시작';
+   const action=run?.phase==='awaiting_input'?'이어서 실행':'시작';
    const label=`${n}단계 ${title.replaceAll('\n',' ')} ${action}`;
    const icon=document.createElement('span');
-   icon.className=running?'stage-run-icon is-running':'stage-run-icon';
+   icon.className='stage-run-icon';
    icon.setAttribute('aria-hidden','true');
    runButton.setAttribute('aria-label',label);
    runButton.title=label;
@@ -330,13 +338,17 @@ async function startDashboardStage(step,current=dashboardWork){
 }
 
 function stageResultKey(step){
+ if(step===1&&dashboardWork.topic)return JSON.stringify([dashboardWork.resetAt,step,dashboardWork.topic]);
  if(step===2&&dashboardSynopsisRevision)return JSON.stringify([dashboardWork.projectPath,step,dashboardSynopsisRevision]);
  const run=dashboardRunner.runs[step];
- if(run?.resultAvailable)return run.id;
- return dashboardResultSteps.includes(step)?JSON.stringify([dashboardWork.projectPath,step]):null;
+ if(run?.phase==='completed'&&run.resultAvailable)return run.id;
+ const entry=statuses[step];
+ const hasRecordedResult=entry?.state==='completed'||entry?.resultText?.trim()||entry?.resultFiles?.length;
+ return hasRecordedResult&&dashboardResultSteps.includes(step)?JSON.stringify([dashboardWork.projectPath,step]):null;
 }
 
 const resultOpenNotice=document.createElement('div');
+const resultExplorerBridge=null;
 resultOpenNotice.className='result-open-notice';
 resultOpenNotice.setAttribute('role','status');
 resultOpenNotice.setAttribute('aria-atomic','true');
@@ -354,15 +366,65 @@ function showResultOpenNotice(message,detail,error=false){
  resultOpenNoticeTimer=setTimeout(()=>resultOpenNotice.replaceChildren(),6500);
 }
 
-function renderResultFiles(step,result,target){
- if(!result.files?.length&&!result.txt?.length)return;
+async function requestResultOpen(payload){
+ const endpoints=resultExplorerBridge?[resultExplorerBridge,null]:[null];
+ for(const [index,bridge] of endpoints.entries()){
+  try{
+   const response=await fetch((bridge?.url??'')+'/api/steps/result/open'+query,{
+    method:'POST',headers:{'Content-Type':'application/json',...(bridge?{'X-Yadam-Explorer':bridge.token}:{})},
+    body:JSON.stringify(payload)
+   });
+   const result=await response.json();
+   if(!response.ok||!result.verified)throw Error(result.error||'파일 탐색기 창을 확인할 수 없습니다.');
+   return;
+  }catch(error){
+   if(index===endpoints.length-1)throw error;
+  }
+ }
+}
+
+function renderSelectedTopic(target){
+ const selection=dashboardWork.topicSelection;
+ const selected=selection?.candidates?.find(candidate=>candidate.title===dashboardWork.topic);
+ if(!dashboardWork.topic)return;
+ const name=document.createElement('strong');
+ name.textContent=dashboardWork.topic;
+ target.append(name);
+ const summary=selected?.summary||dashboardWork.synopsisSummary;
+ if(summary){
+  const description=document.createElement('p');
+  description.textContent=summary;
+  target.append(description);
+ }
+}
+
+function scriptLengthNote(result){
+ let characters=result.bodyCharacters;
+ if(!Number.isInteger(characters)){
+  const body=result.text?.match(/(?:^|\n)#{1,6}[ \t]+본편[ \t]*\r?\n([\s\S]*?)(?=\r?\n#{1,6}[ \t]+마무리|$)/)?.[1];
+  if(!body)return '';
+  characters=body.replace(/\r\n/g,'\n').split(/^#{1,6}[^\n]*\n/gm).map(part=>part.trim()).filter(Boolean).join('\n\n').length;
+ }
+ if(characters<=0)return '';
+ const duration=minutes=>minutes<60?`${minutes}분`:`${Math.floor(minutes/60)}시간${minutes%60?' '+minutes%60+'분':''}`;
+ const min=Math.round(characters/340),max=Math.round(characters/300);
+ const range=max<60?`${min}~${max}분`:`${duration(min)}~${duration(max)}`;
+ return `본편 ${characters.toLocaleString('ko-KR')}자 · 예상 낭독 약 ${range}`;
+}
+
+function renderStageResult(step,result,target){
  const projectPath=dashboardWork.projectPath??null;
  const resetAt=dashboardWork.resetAt??null;
+ const entry=statuses[step]??{};
+ const curatedResults=step===5||step===6;
  const section=document.createElement('section');
  section.className='result-files';
+ if(step===1)renderSelectedTopic(section);
  const preview=document.createElement('section');
  preview.className='result-txt-preview';
  preview.hidden=true;
+ preview.id="stage-result-txt-preview";
+ let activeTxtButton=null;
  const documents=new Map((result.txt??[]).map(document=>[document.id,document]));
  function txtButton(documentInfo,label){
   const button=document.createElement('button');
@@ -370,9 +432,20 @@ function renderResultFiles(step,result,target){
   button.className='quiet result-txt-button';
   button.textContent=label;
   button.setAttribute('aria-label',`${documentInfo.name} TXT 열고 이 채팅에 표시`);
-  button.title='TXT 원문을 열고 이 채팅에 표시를 요청합니다';
+  button.title='TXT 원문 열기 · 다시 누르면 닫기';
+  button.setAttribute('aria-controls',preview.id);
+  button.setAttribute('aria-expanded','false');
   button.addEventListener('click',async()=>{
-   button.disabled=true;
+   const wasOpen=activeTxtButton===button;
+   activeTxtButton?.setAttribute('aria-expanded','false');
+   if(wasOpen){
+    activeTxtButton=null;
+    preview.hidden=true;
+    preview.replaceChildren();
+    return;
+   }
+   activeTxtButton=button;
+   button.setAttribute('aria-expanded','true');
    const status=document.createElement('p');
    status.setAttribute('role','status');
    status.textContent='TXT를 열고 채팅에 표시를 요청하는 중입니다.';
@@ -384,6 +457,7 @@ function renderResultFiles(step,result,target){
      body:JSON.stringify({step,id:documentInfo.id,expectedProjectPath:projectPath,resetAt})
     });
     const documentResult=await response.json();
+    if(status.parentNode!==preview)return;
     if(!response.ok)throw Error(documentResult.error);
     const title=document.createElement('strong');
     title.textContent=documentInfo.name;
@@ -393,20 +467,20 @@ function renderResultFiles(step,result,target){
     body.textContent=previewText;
     body.tabIndex=0;
     body.setAttribute('aria-label',documentInfo.name+' 원문');
-    function copyButton(label,text){
+    function copyButton(label,text,anchor=body){
      const copy=document.createElement('button');
      copy.type='button';
      copy.className='quiet';
      copy.textContent=label;
      copy.addEventListener('click',async()=>{
-      try{await navigator.clipboard.writeText(text);status.textContent=`${label} 완료. 채팅 입력창에서 Ctrl+V로 붙여 넣을 수 있습니다.`;}
+      try{await navigator.clipboard.writeText(text);status.textContent=`${label} 완료. Ctrl+V로 붙여 넣을 수 있습니다.`;}
       catch{status.textContent='자동 복사가 되지 않아 복사할 내용을 열었습니다.';
        const field=document.createElement('textarea');
        field.value=text;
        field.readOnly=true;
        field.setAttribute('aria-label',label);
        preview.querySelector('textarea')?.remove();
-       body.before(field);
+       anchor.before(field);
        field.select();
       }
      });
@@ -419,54 +493,176 @@ function renderResultFiles(step,result,target){
     actions.className='result-txt-actions';
     if(!documentResult.queued)actions.append(copyButton('채팅 요청 복사',documentResult.prompt));
     actions.append(copyButton('본문 복사',previewText));
-    preview.replaceChildren(title,status,actions,body);
+    preview.replaceChildren(title,status,actions);
+    const videoSection=step===11?previewText.split(/^■ 컷별 영상 프롬프트[ \t]*$/m)[1]:null;
+    const cuts=videoSection?.split(/^■ (I\d{2,}(?:-[A-Z])? ·[^\r\n]+)/m)??[];
+    const flow=document.createElement('section');
+    flow.className='result-flow-prompts';
+    for(let i=1;i<cuts.length;i+=2){
+     const prompt=cuts[i+1].match(/^```text[ \t]*\r?\nI\d{2,}(?:-[A-Z])?[ \t]*\|[^\r\n]*\r?\n([\s\S]+?)\r?\n^```[ \t]*$/m)?.[1];
+     if(!prompt)continue;
+     flow.append(copyButton(cuts[i].split(' ·')[0]+' 프롬프트 복사',prompt.trim()));
+    }
+    if(flow.children.length){
+     const heading=document.createElement('h3');
+     heading.textContent='플로우에 붙여넣기';
+     flow.prepend(heading);
+     preview.append(flow);
+    }
+    preview.append(body);
    }catch(error){status.textContent=error.message||'TXT를 열지 못했습니다.';}
-   finally{button.disabled=false;}
   });
   return button;
  }
- function openButton(label,file=null){
+ function openButton(label,file){
   const button=document.createElement('button');
   button.type='button';
   button.textContent=label;
   button.addEventListener('click',async()=>{
    button.disabled=true;
-   const locationName=file?label:(result.folder==='.'?dashboardWork.topic:result.folder.split('/').at(-1));
-   showResultOpenNotice('파일 탐색기를 여는 중이에요',locationName);
+   showResultOpenNotice('파일 탐색기를 여는 중이에요',label);
    try{
-    const response=await fetch('/api/steps/result/open'+query,{
-     method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({step,file,expectedProjectPath:projectPath})
-    });
-    if(!response.ok)throw Error((await response.json()).error);
-    showResultOpenNotice(file?'파일 위치를 열었어요':'저장 폴더를 열었어요',locationName);
+    await requestResultOpen({step,file,expectedProjectPath:projectPath});
+    showResultOpenNotice(file?'파일 위치를 열었어요':'저장 폴더를 열었어요',label);
    }catch(error){
-    showResultOpenNotice('파일 탐색기를 열지 못했어요',error.message||locationName,true);
+    showResultOpenNotice('파일 탐색기를 열지 못했어요',error.message||label,true);
    }
    finally{button.disabled=false;}
   });
   return button;
  }
- if(result.folder){
-  const folder=openButton('저장 폴더 열기');
-  folder.className='quiet';
+ if(result.folder&&!curatedResults){
+  const folder=openButton('저장 폴더 열기',null);
+  folder.className='result-file-link result-folder-link';
   section.append(folder);
  }
- const summary=documents.get('summary');
- if(summary)section.append(txtButton(summary,'TXT'));
+ let files=result.files??[];
+ const isValidation=file=>/(?:분할\s*검증|분할검증|split.?validation)/i.test(file.path+' '+file.label);
+ if(step===4){
+  for(const file of files.filter(isValidation))documents.delete(file.path);
+  files=files.filter(file=>!isValidation(file));
+ }
+ const stage5Items=[
+  ['이미지 기준과 프롬프트',/이미지[ _-]*(기준|스타일).*프롬프트/i],
+  ['캐릭터목록',/캐릭터[ _-]*목록|등장인물[ _-]*목록|character[ _-]*list/i],
+  ['에셋목록',/에셋[ _-]*목록|asset[ _-]*(manifest|index)/i],
+  ['기본 화풍참조',/기본\s*화풍\s*참조|스타일참조[/\\]/i]
+ ];
+ const characterFiles=step===5?files.filter(file=>/(?:^|\/)캐릭터\//i.test(file.path)&&/\.(png|jpe?g|webp|gif|avif)$/i.test(file.path)):[];
+ if(step===5){
+  files=stage5Items.map(([label,pattern])=>{
+   const matches=files.filter(file=>pattern.test(file.label+' '+file.path));
+   const file=matches.find(file=>/\.md$/i.test(file.path))??matches[0];
+   if(!file&&label==='캐릭터목록'&&characterFiles.length)return {label,characters:characterFiles};
+   return file?{...file,label}:{label,missing:true};
+  });
+ }
+ if(step===6){
+  const prompts=files.filter(file=>/이미지[ _-]*(?:생성[ _-]*)?프롬프트|(?:scene|image)[ _-]*prompts?/i.test(file.label+' '+file.path));
+  const prompt=prompts.find(file=>/\.txt$/i.test(file.path))??prompts[0];
+  files=[prompt?{...prompt,label:'씬별 이미지 프롬프트'}:{label:'씬별 이미지 프롬프트',missing:true}];
+ }
+ const plainFiles=new Map(files.filter(file=>file.path&&/\.txt$/i.test(file.path)).map(file=>[file.path.toLowerCase(),file]));
+ const companionFor=new Map();
+ for(const file of files){
+  if(!file.path||!/\.(md|markdown)$/i.test(file.path))continue;
+  const companion=plainFiles.get(file.path.replace(/\.(md|markdown)$/i,'.txt').toLowerCase());
+  if(companion&&documents.has(companion.path))companionFor.set(file.path,companion.path);
+ }
+ const companions=new Set(companionFor.values());
  const list=document.createElement('ol');
- for(const file of result.files??[]){
+ const attachedTxt=new Set();
+ for(const file of files){
+  if(companions.has(file.path))continue;
   const item=document.createElement('li');
+  if(file.characters){
+   const group=document.createElement('details');
+   group.className='result-characters';
+   const title=document.createElement('summary');
+   title.textContent=file.label;
+   const names=document.createElement('ul');
+   for(const character of file.characters){
+    const row=document.createElement('li');
+    const link=openButton(character.label,character.path);
+    link.className='result-file-link';
+    row.append(link);
+    names.append(row);
+   }
+   group.append(title,names);
+   item.append(group);
+   list.append(item);
+   continue;
+  }
+  if(file.missing){
+   item.textContent=file.label+' · 준비 중';
+   list.append(item);
+   continue;
+  }
   const button=openButton(file.label,file.path);
   button.className='result-file-link';
   button.title='파일 탐색기에서 '+file.label+' 선택';
   item.append(button);
   if(file.detail)item.append(' · '+file.detail);
-  const txt=documents.get(file.path);
-  if(txt)item.append(txtButton(txt,'TXT'));
+  const companion=companionFor.get(file.path);
+  const txt=step===5&&file.label==='에셋목록'?null:documents.get(companion??file.path);
+  if(txt){
+   item.append(txtButton(txt,'TXT'));
+   attachedTxt.add(txt.id);
+   if(companion)attachedTxt.add(file.path);
+  }
+  list.append(item);
+ }
+ const externalLinks=new Map();
+ function addExternal(label,url){
+  if(!/^https?:\/\//i.test(url))return;
+  try{
+   const href=new URL(url).href;
+   if(!externalLinks.has(href))externalLinks.set(href,label);
+  }catch{}
+ }
+ if(!curatedResults){
+  if(entry.editorUrl)addExternal('CapCut 편집 링크',entry.editorUrl);
+  for(const match of (result.text??'').matchAll(/\[([^\]\r\n]+)\]\(<?(https?:\/\/[^\s)>]+)>?\)/gi)){
+   if(/편집 링크|초안|결과|미리보기|완성본|공유 링크/.test(match[1]))addExternal(match[1],match[2]);
+  }
+ }
+ for(const [href,label] of externalLinks){
+  const item=document.createElement('li');
+  const link=document.createElement('a');
+  link.className='result-file-link';
+  link.textContent=label;
+  link.href=href;
+  link.target='_blank';
+  link.rel='noopener noreferrer';
+  item.append(link);
+  list.append(item);
+ }
+ const remaining=curatedResults?[]:[...documents.values()].filter(document=>document.id!=='summary'&&!attachedTxt.has(document.id));
+ if(!curatedResults&&!remaining.length&&!attachedTxt.size&&documents.has('summary'))remaining.push(documents.get('summary'));
+ for(const documentInfo of remaining){
+  const item=document.createElement('li');
+  item.append(txtButton(documentInfo,documentInfo.name));
   list.append(item);
  }
  if(list.children.length)section.append(list);
+ if(step===6){
+  const checklist=document.createElement('ul');
+  for(const label of ['이미지 멘션 반영하기','이미지생성후 파일이름도 씬이름으로 수정']){
+   const item=document.createElement('li');
+   item.textContent=label;
+   checklist.append(item);
+  }
+  section.append(checklist);
+ }
+ const nextInput=entry.nextInput??(dashboardWork.step===step?dashboardWork.nextInput:null);
+ const failed=entry.state==='failed'||dashboardRunner.runs[step]?.phase==='failed';
+ const guidance=step===3?scriptLengthNote(result):curatedResults?null:failed?(entry.note??result.text?.trim().split(/\r?\n/)[0]):nextInput;
+ if(typeof guidance==='string'&&guidance.trim()){
+  const note=document.createElement('p');
+  note.className='result-guidance';
+  note.textContent=guidance.trim();
+  section.append(note);
+ }
  section.append(preview);
  target.append(section);
 }
@@ -479,19 +675,22 @@ async function toggleStageResult(step,id){
   focusStageResultButton(step);
   return;
  }
+ openStageResult={step,id};
+ stageResultTitle.textContent=`${step}단계 작업 결과`;
+ stageResultContent.replaceChildren();
+ if(step===1)renderSelectedTopic(stageResultContent);
+ paint();
+ focusStageResultButton(step);
  try{
   const revision=step===2?dashboardSynopsisRevision:null;
   const endpoint=revision?'/api/synopsis'+query:'/api/steps/result'+query+'&step='+step;
   const response=await fetch(endpoint,{cache:'no-store'});
   const result=await response.json();
   if(!response.ok)throw Error(result.error);
-  if(stageResultKey(step)!==id)return;
+  if(openStageResult?.id!==id||stageResultKey(step)!==id)return;
   if(revision&&result.revision!==revision)throw Error('시놉시스가 갱신됐습니다. 잠시 후 다시 열어 주세요.');
-  openStageResult={step,id};
-  stageResultTitle.textContent=`${step}단계 작업 결과`;
   stageResultContent.replaceChildren();
-  renderResultFiles(step,result,stageResultContent);
-  if(result.text)renderSynopsis(result.text.replace(/\[([^\]\r\n]+)\]\(<?[A-Za-z]:[\\/][^>\r\n)]*>?\)/g,'$1'),stageResultContent);
+  renderStageResult(step,result,stageResultContent);
   paint();
   focusStageResultButton(step);
  }catch(error){notifyStage(error.message||'작업 결과를 불러오지 못했습니다.');}
@@ -499,27 +698,6 @@ async function toggleStageResult(step,id){
 
 function focusStageResultButton(step){
  container.querySelector(`.step[data-step="${step}"] .stage-result-toggle`)?.focus({preventScroll:true});
-}
-
-function synopsisLine(element,line){
- for(const [index,part] of line.split(/\*\*(.+?)\*\*/g).entries()){
-  if(index%2===0)element.append(part);
-  else{
-   const strong=document.createElement('strong');
-   strong.textContent=part;
-   element.append(strong);
-  }
- }
- return element;
-}
-
-function renderSynopsis(text,target){
- for(const line of text.split(/\r?\n/)){
-  if(!line.trim())continue;
-  const heading=line.match(/^(#{1,6})\s+(.+)$/);
-  const tag=heading?`h${Math.min(heading[1].length+2,6)}`:'p';
-  target.append(synopsisLine(document.createElement(tag),heading?.[2]??line));
- }
 }
 
 function showTopicChoice(current){
@@ -612,9 +790,9 @@ topicNext.addEventListener('click',async()=>{
  }
 });
 
-async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store'});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardResultSteps=snapshot.resultSteps??[];dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardSynopsisRevision=snapshot.synopsisRevision??null;dashboardStageResetOnly=snapshot.stageResetOnly===true;showTopicChoice(current);updateTopicButton();
+async function refresh(){if(fetching)return;fetching=true;try{const r=await fetch('/api/snapshot'+query,{cache:'no-store',signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error();const snapshot=await r.json();if(snapshot.session!==session||!snapshot.steps||typeof snapshot.steps!=='object')throw Error();container.classList.remove('connection-lost');const next=JSON.stringify(snapshot);if(next!==signature){signature=next;statuses=snapshot.steps;imageReview=snapshot.imageReview??{};const current=snapshot.current||{};projectClosed=current.projectStatus==='closed';activeProjectPath=current.projectPath;dashboardWork=current;dashboardResultSteps=snapshot.resultSteps??[];dashboardRunner=snapshot.runner??{available:false,busy:false,runs:{}};dashboardSynopsisRevision=snapshot.synopsisRevision??null;dashboardStageResetOnly=snapshot.stageResetOnly===true;showTopicChoice(current);updateTopicButton();
 chatGuide.textContent=dashboardRunner.available?'현황표에서 진행할 단계의 시작 버튼을 누르세요.':current.topic?'채팅에 “다음 단계”를 입력해 이어가세요.':'채팅에 “1”을 입력하면 주제와 길이를 고를 수 있어요.';
-updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'현황표에서 주제와 영상 길이를 골라주세요.';paint()}resetButton.disabled=!session||resetBusy||dashboardRunner.busy;document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
+updateCleanup(current);updateProjectClose(current);steps=expandedSteps;if(current.workflowOrderVersion!==3){const old={...statuses};if(current.workflowOrderVersion===2){statuses={...old,13:old[12]};}else{statuses={...old,10:old[12],11:old[10],13:old[11]};}delete statuses[12];}showChannelName(snapshot.channelName||'');document.querySelector('.project-info h2').textContent=current.topic||'작품 선택 전';document.querySelector('.project-info p').textContent=current.topic?[(current.duration||'길이 미정'),'고전풍 창작'].join(' · '):'현황표에서 주제와 영상 길이를 골라주세요.';paint()}resetButton.disabled=!session||resetBusy||dashboardRunner.busy;document.getElementById('connection').textContent='현황 연결됨 · '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}catch{container.classList.add('connection-lost');document.getElementById('connection').textContent='현황 연결 끊김 · 표시된 상태는 최신이 아닐 수 있습니다.'}finally{fetching=false}}
 paint();setTimeout(refresh,0);setInterval(refresh,2500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 
 const channelForm=document.getElementById('channel-form');

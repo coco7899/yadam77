@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {spawn} from 'node:child_process';
+import {execFile} from 'node:child_process';
 import {createCleanup} from './cleanup.mjs';
 import {createSceneImageReview} from './scene-image-review.mjs';
 import {createStageRunner} from './stage-runner.mjs';
@@ -146,21 +146,54 @@ function prepareStageResult(session,stateDir,step){
  return {...data,documents:prepareResultTxt({sessionDir:stateDir,step,...data})};
 }
 
-function publicResult(data){
- const {text,files,folder}=data.result;
- return {text,files,folder,revision:data.revision,txt:data.documents.map(({id,name})=>({id,name}))};
+function publicResult(data,step){
+ const {text,files,folder,project}=data.result;
+ let bodyCharacters;
+ if(step===3){
+  const source=files.find(file=>/대본[^/]*\.md$/i.test(file.path))??files.find(file=>/대본[^/]*\.txt$/i.test(file.path));
+  const body=(source?readText(path.join(project,source.path)):text)?.match(/(?:^|\n)#{1,6}[ \t]+본편[ \t]*\r?\n([\s\S]*?)(?=\r?\n#{1,6}[ \t]+마무리|$)/)?.[1];
+  if(body)bodyCharacters=body.replace(/\r\n/g,'\n').split(/^#{1,6}[^\n]*\n/gm).map(part=>part.trim()).filter(Boolean).join('\n\n').length;
+ }
+ return {text,files,folder,bodyCharacters,revision:data.revision,txt:data.documents.map(({id,name})=>({id,name}))};
 }
 function openResultInExplorer(current,result,selection){
  const selected=selection==null?result.folder:result.files.find(file=>file.path===selection)?.path;
  if(!selected)throw Error('현재 결과에서 열 수 있는 파일이나 폴더를 선택해 주세요.');
  if(process.platform!=='win32')throw Error('저장 위치 열기는 Windows에서 사용할 수 있습니다.');
  const target=path.resolve(current.projectPath,selected);
- const quotedPath='"'+target+'"';
- const args=[selection==null?quotedPath:'/select,'+quotedPath];
+ const shell=path.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe');
+ const command=String.raw`
+$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+$folder=$env:YADAM_RESULT_FOLDER
+$file=$env:YADAM_RESULT_FILE
+$explorer=New-Object -ComObject Shell.Application
+$explorer.Explore($folder)
+for($attempt=0;$attempt -lt 25;$attempt++){
+ foreach($window in $explorer.Windows()){
+  try{
+   $view=$window.Document
+   if([string]$view.Folder.Self.Path -ine $folder){continue}
+   if($file){
+    $item=$view.Folder.ParseName($file)
+    if(!$item){continue}
+    $view.SelectItem($item,29)
+    if(!(@($view.SelectedItems() | ForEach-Object { [IO.Path]::GetFileName($_.Path) }) -icontains $file)){continue}
+   }
+   exit 0
+  }catch{}
+ }
+ Start-Sleep -Milliseconds 160
+}
+exit 1`;
+ const env={...process.env,YADAM_RESULT_FOLDER:selection==null?target:path.dirname(target),
+  YADAM_RESULT_FILE:selection==null?'':path.basename(target)};
  return new Promise((resolve,reject)=>{
-  const child=spawn('explorer.exe',args,{detached:true,stdio:'ignore',windowsVerbatimArguments:true});
-  child.once('error',()=>reject(Error('파일 탐색기를 열지 못했습니다.')));
-  child.once('spawn',()=>{child.unref();resolve();});
+  execFile(shell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(command,'utf16le').toString('base64')],
+   {env,windowsHide:true,timeout:8000},error=>{
+    if(error)reject(Error('Windows에서 파일 탐색기 창을 열지 못했습니다.'));
+    else resolve();
+   });
  });
 }
 function findSynopsis(session,current,entry){
@@ -234,7 +267,7 @@ function updateTopicChoice(session,stateDir,input,showNext){
 http.createServer(async(req,res)=>{
  if(![`127.0.0.1:${port}`,`localhost:${port}`].includes(req.headers.host))return reply(res,403,{error:'Local access only'});
  const url=new URL(req.url,`http://127.0.0.1:${port}`);const route=url.pathname;
- if(route==='/api/health')return reply(res,200,{service:'lala-yadam-dashboard',version:2,workflowOrderVersion:3,sceneImageReview:true,sceneImageReviewChoice:true,usageNoticeVersion:1,projectReset:true,dubbingRestart:true,stageRestart:true,topicChoice:true,topicChoiceVersion:3,synopsisReader:true,stageRunner:true,resultFileLinks:true,resultFileOpenVersion:2,resultTxtVersion:3,stageRunnerAvailable:runner.snapshot(null,{}).available,pid:process.pid,root});
+ if(route==='/api/health')return reply(res,200,{service:'lala-yadam-dashboard',version:2,workflowOrderVersion:3,sceneImageReview:true,sceneImageReviewChoice:true,usageNoticeVersion:1,projectReset:true,dubbingRestart:true,stageRestart:true,topicChoice:true,topicChoiceVersion:3,synopsisReader:true,stageRunner:true,stageActivityVersion:1,resultFileLinks:true,resultFileOpenVersion:3,resultTxtVersion:3,stageRunnerAvailable:runner.snapshot(null,{}).available,pid:process.pid,root});
  const session=url.searchParams.get('session');
  if(session!==null&&!/^[a-zA-Z0-9_-]{1,96}$/.test(session))return reply(res,400,{error:'Invalid session'});
  const stateDir=session?path.join(base,'sessions',session):base;
@@ -275,7 +308,7 @@ http.createServer(async(req,res)=>{
     const result=resultData(session,stateDir,step)?.result;
     if(!result)throw Error('현재 단계의 결과가 없습니다.');
     await openResultInExplorer(current,result,file);
-    return reply(res,200,{opened:true});
+    return reply(res,200,{opened:true,verified:true});
    }
    if(route==='/api/steps/run'){
     if(!session)throw Error('현재 채팅의 현황표를 열어 주세요.');
@@ -334,8 +367,9 @@ http.createServer(async(req,res)=>{
    const resultSteps=Array.from({length:13},(_,index)=>index+1).filter(step=>{
     if(!session||current.dashboardSession!==session)return false;
     const entry=steps[step];
-    if(step===1&&(current.topic||current.topicSelection?.candidates?.length))return true;
-    if((step===2&&synopsisRevision)||entry?.state==='completed'||entry?.note||entry?.resultText)return true;
+    if(step===1&&current.topic)return true;
+    if((step===2&&synopsisRevision)||entry?.state==='completed'||entry?.resultText?.trim())return true;
+    if(!entry?.resultFiles?.length)return false;
     try{return stageResult(session,step,current,steps[step],null).files.length>0;}catch{return false;}
    });
    return reply(res,200,{session,steps,current,imageReview,synopsisRevision,resultSteps,stageResetOnly:true,runner:runner.snapshot(session,current),channelName:read(profilePath).channelName||''});
@@ -344,7 +378,7 @@ http.createServer(async(req,res)=>{
    const step=Number(url.searchParams.get('step'));
    if(!session||!Number.isInteger(step)||step<1||step>13)return reply(res,400,{error:'확인할 단계를 선택해 주세요.'});
    const data=prepareStageResult(session,stateDir,step);
-   return data?reply(res,200,publicResult(data)):reply(res,404,{error:'아직 저장된 작업 결과가 없습니다.'});
+   return data?reply(res,200,publicResult(data,step)):reply(res,404,{error:'아직 저장된 작업 결과가 없습니다.'});
   }
   if(route==='/api/synopsis'){
    const data=prepareStageResult(session,stateDir,2);
